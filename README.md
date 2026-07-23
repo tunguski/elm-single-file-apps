@@ -1,0 +1,113 @@
+# elm-single-file-apps
+
+A showcase of **single-file applications** written in [Elm](https://elm-lang.org) and compiled with
+the [elm-lang](https://github.com/tunguski/elm-lang) compiler. Each app is one self-contained HTML
+file that **stores its own data inside itself** — you edit, then press <kbd>Ctrl</kbd>+<kbd>S</kbd>
+and the page writes a fresh copy of itself back to disk with your data embedded. No server, no
+database, no `localStorage` — the file _is_ the document (the TiddlyWiki idea, in Elm).
+
+**Live:** https://tunguski.github.io/elm-single-file-apps/
+
+## The apps
+
+| App | What it is |
+| --- | --- |
+| 🗒️ **Notes** | A two-pane note keeper with search. |
+| ✅ **Todos** | A to-do list with filters, inline edit and a live remaining count. |
+| 📚 **Wiki** | Interlinked plain-text pages with `[[wiki-links]]` that create pages on click. |
+| 🔢 **Sudoku** | Playable Sudoku — keyboard entry, pencil marks, conflict highlighting, a puzzle bank. |
+| 📅 **Calendar** | A month view with events; all date math is pure (no `Time` effects). |
+| 📊 **Spreadsheet** | The real [elm-spreadsheet](https://github.com/tunguski/elm-spreadsheet) engine (~120 formula functions) driven through the same harness. |
+
+## How the self-saving works
+
+Every app is built on a tiny shared harness ([`shared/App.elm`](shared/App.elm) +
+[`assets/harness.js`](assets/harness.js)) connected by two ports:
+
+1. **Load** — the built file carries a `<script id="app-data">` block (base64-encoded JSON). On boot
+   the JS harness reads it and sends it into Elm as a small envelope `{ today, saved }`.
+2. **Mirror** — after every change Elm hands its freshly-serialized state back out; the harness keeps
+   it and mirrors it into the data block, so the live DOM always carries current data.
+3. **Save** — on <kbd>Ctrl</kbd>+<kbd>S</kbd> the harness serializes the whole page (with an emptied
+   mount, since the runtime appends on boot) and writes it back:
+   - **In place** via the [File System Access API](https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API)
+     in Chrome & Edge — the same file is overwritten.
+   - **As a download** everywhere else (Firefox, Safari, `file://`) — you save over the original.
+
+   A small badge shows unsaved changes and confirms saves; closing with unsaved changes warns you.
+
+Because everything is inlined, **every app already works fully offline** — open it straight from
+disk. Served over HTTPS, each app also ships a web-app manifest + icon, so it's an **installable
+PWA**. (A true offline service worker isn't used or needed: a single inlined file has nothing to
+cache, and service workers don't run from `file://` anyway.)
+
+An app never touches ports itself — it provides a pure `Spec` and calls `App.program`:
+
+```elm
+main : Program () (App.State Model) (App.Event Msg)
+main =
+    App.program
+        { init = init            -- Env -> Model   (Env carries today's date)
+        , update = update        -- Msg -> Model -> Model   (pure; saving is automatic)
+        , view = view
+        , subscriptions = \_ -> Sub.none
+        , encode = encode        -- Model -> Json.Encode.Value
+        , decoder = decoder      -- Env -> Json.Decode.Decoder Model
+        }
+```
+
+## Building
+
+Requires the elm-lang compiler in the parent repo (this project lives in `elm-lang/projects/`). From
+this directory:
+
+```bash
+ELM=../../elm.sh ./build.sh            # build every app + the showcase into build/
+ELM=../../elm.sh ./build.sh notes      # build a single app by id
+```
+
+Outputs land in `build/` as standalone `.html` files, plus `build/index.html` (the showcase
+gallery, generated from the app registry in `build.sh`).
+
+### Headless smoke test
+
+Each build can be booted in [jsdom](https://github.com/jsdom/jsdom) to prove it mounts, its ports
+work, and its data round-trips:
+
+```bash
+npm i jsdom
+node tools/verify.mjs build/notes.html
+node tools/verify.mjs build/notes.html --seed '{"notes":[{"id":1,"title":"Hi","body":"x"}],"nextId":2}'
+```
+
+The CI workflow ([`.github/workflows/pages.yml`](.github/workflows/pages.yml)) runs this over all six
+apps and refuses to deploy if any fails to boot.
+
+## Layout
+
+```
+shared/App.elm            the framework: ports + the App.program builder
+src/*.elm                 the five simple apps (lean root project, no vendored deps)
+src/*.css                 per-app styles (theme-aware, on top of assets/app.css)
+sheet/SheetApp.elm        the spreadsheet, driving SheetDoc.config
+sheet/elm.json            the spreadsheet's own project…
+sheet/elm.vendored.json   …with elm-spreadsheet + elm-workspace as git source deps
+assets/app.css            the shared design system (light/dark)
+assets/harness.js         the load / mirror / Ctrl+S-save JS harness
+assets/showcase.html      the gallery template ( <!--CARDS--> is filled from the registry )
+tools/inject.pl           post-processor: inlines CSS + harness, adds the data block + PWA manifest
+build.sh                  compiles each app and post-processes it into a single file
+```
+
+The spreadsheet keeps its own project (`sheet/`) so its heavy vendored engine is bundled only into
+the spreadsheet build — the compiler is whole-program, so mixing it into the root project would bloat
+every app. That's why the five simple apps are ~190 KB while the full spreadsheet is ~820 KB.
+
+## Adding an app
+
+1. Write `src/YourApp.elm` exposing `main` via `App.program` (see any existing app).
+2. Optionally add `src/yourid.css`.
+3. Add one row to the `APPS` registry in `build.sh`: `id|Module|Title|#color|emoji|subtitle`.
+4. `ELM=../../elm.sh ./build.sh yourid` and verify with `tools/verify.mjs`.
+
+The showcase card and the PWA manifest/icon are generated from that registry row automatically.

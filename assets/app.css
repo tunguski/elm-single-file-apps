@@ -1,0 +1,338 @@
+/* app.css — the shared design system for every single-file app.
+ *
+ * Inlined into each built page. Deliberately theme-aware (light/dark via prefers-color-scheme) and
+ * dependency-free. App-specific rules live in each app's own <style> block appended after this one.
+ */
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --border: #dfe3ea;
+  --text: #1c2330;
+  --muted: #667085;
+  --accent: #3b6cf6;
+  --accent-contrast: #ffffff;
+  --danger: #e5484d;
+  --ok: #2f9e44;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+  --radius: 10px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f141b;
+    --surface: #171d26;
+    --surface-2: #1f2734;
+    --border: #2a3340;
+    --text: #e6edf3;
+    --muted: #93a0b1;
+    --accent: #5b8cff;
+    --accent-contrast: #0b1220;
+    --danger: #ff6369;
+    --ok: #4cc76a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.25);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--bg);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100vh;
+}
+
+/* ---- layout primitives ---- */
+
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app--split {
+  flex-direction: row;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.pane--list {
+  width: 300px;
+  flex: 0 0 300px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.pane--main {
+  flex: 1 1 auto;
+  background: var(--bg);
+}
+
+.pane__head {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+
+/* ---- top toolbar (single-column apps) ---- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.toolbar__title {
+  font-weight: 650;
+  font-size: 16px;
+  margin-right: auto;
+}
+
+.body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 16px;
+  min-height: 0;
+}
+
+/* ---- controls ---- */
+
+.btn {
+  font: inherit;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  padding: 7px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: var(--surface-2);
+}
+
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.btn--primary:hover {
+  filter: brightness(1.05);
+}
+
+.btn--danger {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: transparent;
+}
+
+.btn--danger:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.btn--ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+.btn--ghost:hover {
+  background: var(--surface-2);
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ---- lists ---- */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow: auto;
+  flex: 1 1 auto;
+}
+
+.list__item {
+  padding: 9px 11px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.list__item:hover {
+  background: var(--surface-2);
+}
+
+.list__item.is-active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.list__title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list__sub {
+  color: var(--muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- editor ---- */
+
+.editor {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px;
+  gap: 12px;
+}
+
+.editor__title {
+  font-size: 22px;
+  font-weight: 650;
+  border: none;
+  background: transparent;
+  padding: 4px 0;
+}
+
+.editor__title:focus {
+  outline: none;
+}
+
+.editor__body {
+  flex: 1 1 auto;
+  resize: none;
+  border: none;
+  background: transparent;
+  font-size: 15px;
+  line-height: 1.6;
+  padding: 0;
+}
+
+.editor__body:focus {
+  outline: none;
+}
+
+.editor__foot {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  padding: 24px;
+  text-align: center;
+}
+
+.kbd {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* ---- self-save status badge (owned by harness.js, sibling of #app) ---- */
+
+.sfa-badge {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 99998;
+  font: 500 12px/1 var(--font);
+  padding: 7px 11px;
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  user-select: none;
+  pointer-events: none;
+  border: 1px solid var(--border);
+}
+
+.sfa-clean {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.sfa-dirty {
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
+.sfa-flash {
+  background: color-mix(in srgb, var(--ok) 16%, var(--surface));
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+}

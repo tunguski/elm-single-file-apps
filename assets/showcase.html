@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Single-File Apps</title>
+<meta name="description" content="Six little apps, each a single HTML file that stores its own data — press Ctrl+S to save.">
+<meta name="theme-color" content="#3b6cf6">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Single-File Apps">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='512'%20height='512'%3E%3Crect%20width='512'%20height='512'%20rx='96'%20fill='%233b6cf6'/%3E%3Ctext%20x='256'%20y='330'%20font-size='300'%20text-anchor='middle'%3E%F0%9F%92%BE%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #fff; --surface-2: #eef0f4; --border: #dfe3ea;
+    --text: #1c2330; --muted: #667085; --accent: #3b6cf6; --accent-contrast: #fff;
+    --shadow: 0 1px 2px rgba(16,24,40,.06), 0 4px 16px rgba(16,24,40,.06);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f141b; --surface: #171d26; --surface-2: #1f2734; --border: #2a3340;
+      --text: #e6edf3; --muted: #93a0b1; --accent: #5b8cff; --accent-contrast: #0b1220;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.3);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: var(--font); color: var(--text); background: var(--bg);
+    line-height: 1.55; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 56px 20px 72px; }
+  .hero { text-align: center; margin-bottom: 44px; }
+  .hero__badge {
+    display: inline-block; font: 600 12px/1 var(--mono); letter-spacing: .08em;
+    text-transform: uppercase; color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    padding: 6px 12px; border-radius: 999px; margin-bottom: 18px;
+  }
+  h1 { font-size: clamp(30px, 6vw, 46px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -.02em; }
+  .hero__lead { font-size: 18px; color: var(--muted); max-width: 560px; margin: 0 auto; }
+  .hero__lead kbd {
+    font: 600 13px/1 var(--mono); background: var(--surface-2); border: 1px solid var(--border);
+    border-bottom-width: 2px; border-radius: 6px; padding: 2px 7px; color: var(--text);
+  }
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 16px; margin-bottom: 56px;
+  }
+  .card {
+    display: flex; align-items: center; gap: 15px; text-decoration: none; color: inherit;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px 18px; box-shadow: var(--shadow);
+    transition: transform .13s ease, border-color .13s ease, box-shadow .13s ease;
+  }
+  .card:hover {
+    transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    box-shadow: 0 8px 28px rgba(16,24,40,.12);
+  }
+  .card__icon {
+    flex: 0 0 auto; width: 46px; height: 46px; border-radius: 11px;
+    display: grid; place-items: center; font-size: 24px; color: #fff;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.15);
+  }
+  .card__body { display: flex; flex-direction: column; min-width: 0; }
+  .card__title { font-weight: 650; font-size: 16px; }
+  .card__sub { color: var(--muted); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .how { border-top: 1px solid var(--border); padding-top: 40px; }
+  .how h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 22px; }
+  .points { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 22px; }
+  .point__t { font-weight: 650; margin: 0 0 5px; display: flex; align-items: center; gap: 8px; }
+  .point__t .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+  .point p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .point code, .how kbd {
+    font: 500 12.5px/1 var(--mono); background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 6px; color: var(--text);
+  }
+  footer { margin-top: 52px; text-align: center; color: var(--muted); font-size: 13.5px; }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <span class="hero__badge">Elm · single-file · offline</span>
+      <h1>Single-File Apps</h1>
+      <p class="hero__lead">
+        Six little apps. Each is <strong>one self-contained HTML file</strong> that stores its own
+        data inside itself — edit, then press <kbd>Ctrl</kbd>+<kbd>S</kbd> to save.
+      </p>
+    </header>
+
+    <main class="grid">
+      <!--CARDS-->
+    </main>
+
+    <section class="how">
+      <h2>How it works</h2>
+      <div class="points">
+        <div class="point">
+          <p class="point__t"><span class="dot"></span>Your data lives in the file</p>
+          <p>There's no server and no database. Each app serializes its state into a block inside its
+             own HTML, so the file <em>is</em> the document. Copy it, email it, back it up — it's yours.</p>
+        </div>
+        <div class="point">
+          <p class="point__t"><span class="dot"></span>Save with <kbd>Ctrl</kbd>+<kbd>S</kbd></p>
+          <p>In Chrome &amp; Edge the app writes back to the same file in place. Elsewhere it downloads a
+             fresh copy you save over. A badge shows unsaved changes.</p>
+        </div>
+        <div class="point">
+          <p class="point__t"><span class="dot"></span>Offline &amp; installable</p>
+          <p>Everything is inlined, so every app works with no network — open it straight from disk.
+             Served over HTTPS, each one is an installable PWA with its own icon.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      Built with the <a href="https://github.com/tunguski/elm-lang">elm-lang</a> compiler ·
+      the spreadsheet reuses the <a href="https://github.com/tunguski/elm-spreadsheet">elm-spreadsheet</a> engine.
+    </footer>
+  </div>
+</body>
+</html>

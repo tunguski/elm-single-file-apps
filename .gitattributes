@@ -1,0 +1,10 @@
+# Scripts and text sources must stay LF so they run under Linux CI regardless of the checkout OS.
+*.sh   text eol=lf
+*.pl   text eol=lf
+*.mjs  text eol=lf
+*.elm  text eol=lf
+*.css  text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.html text eol=lf
+*.md   text eol=lf

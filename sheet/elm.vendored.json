@@ -1,0 +1,18 @@
+{
+    "dependencies": [
+        {
+            "name": "elm-spreadsheet",
+            "repo": "https://github.com/tunguski/elm-spreadsheet.git",
+            "ref": "master",
+            "source": "src",
+            "exclude": ["Main.elm", "Examples.elm"]
+        },
+        {
+            "name": "elm-workspace",
+            "repo": "https://github.com/tunguski/elm-workspace.git",
+            "ref": "master",
+            "source": "src",
+            "exclude": ["Main.elm"]
+        }
+    ]
+}

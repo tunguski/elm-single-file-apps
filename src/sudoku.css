@@ -1,0 +1,183 @@
+/* sudoku.css — the 9x9 board, number pad and highlighting.
+ *
+ * Layered on top of app.css; uses the shared theme variables so it works in light and dark.
+ */
+
+.sk-body {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.sk-stage {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* ---- the grid ---- */
+
+.sk-grid {
+  --sk-size: min(78vmin, 540px);
+  width: var(--sk-size);
+  height: var(--sk-size);
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  grid-template-rows: repeat(9, 1fr);
+  background: var(--surface);
+  border: 3px solid var(--text);
+  border-radius: calc(var(--radius) + 2px);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  user-select: none;
+}
+
+.sk-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-size: calc(var(--sk-size) / 16);
+  line-height: 1;
+  color: var(--accent);
+  transition: background 0.08s;
+}
+
+/* thick separators between 3x3 boxes */
+.sk-cell.sk-br {
+  border-right: 3px solid var(--text);
+}
+.sk-cell.sk-bb {
+  border-bottom: 3px solid var(--text);
+}
+
+.sk-cell:hover {
+  background: var(--surface-2);
+}
+
+/* given (clue) digits: bold, in the primary text colour, visibly locked */
+.sk-cell.sk-given {
+  color: var(--text);
+  font-weight: 700;
+  cursor: default;
+  background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+}
+
+.sk-digit {
+  pointer-events: none;
+}
+
+/* ---- highlighting (order matters: later rules win) ---- */
+
+.sk-cell.sk-peer {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.sk-cell.sk-given.sk-peer {
+  background: color-mix(in srgb, var(--accent) 8%, color-mix(in srgb, var(--surface-2) 55%, var(--surface)));
+}
+
+.sk-cell.sk-same {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+}
+
+.sk-cell.sk-conflict {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 20%, var(--surface));
+}
+
+.sk-cell.sk-sel {
+  background: color-mix(in srgb, var(--accent) 32%, var(--surface));
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.sk-cell.sk-sel.sk-conflict {
+  background: color-mix(in srgb, var(--danger) 28%, var(--surface));
+  box-shadow: inset 0 0 0 2px var(--danger);
+}
+
+/* ---- pencil marks: a mini 3x3 grid in the cell ---- */
+
+.sk-marks {
+  position: absolute;
+  inset: 6%;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  pointer-events: none;
+}
+
+.sk-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--sk-size) / 42);
+  color: var(--muted);
+  line-height: 1;
+}
+
+/* ---- side panel ---- */
+
+.sk-side {
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.sk-status {
+  font-weight: 600;
+  font-size: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: center;
+}
+
+.sk-status--solved {
+  color: var(--accent-contrast);
+  background: var(--ok);
+  border-color: var(--ok);
+}
+
+/* ---- number pad ---- */
+
+.sk-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.sk-key {
+  font-size: 20px;
+  font-weight: 600;
+  padding: 14px 0;
+}
+
+.sk-key--wide {
+  grid-column: 1 / -1;
+  font-size: 15px;
+}
+
+/* ---- help legend ---- */
+
+.sk-help {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.sk-help .kbd {
+  margin-right: 4px;
+}
+
+@media (max-width: 640px) {
+  .sk-side {
+    width: min(78vmin, 540px);
+  }
+}

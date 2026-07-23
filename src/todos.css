@@ -1,0 +1,123 @@
+/* todos.css — app-specific styling for the Todos app. Theme-aware via app.css variables. */
+
+.todo-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.todos {
+  list-style: none;
+  margin: 0 auto;
+  padding: 0;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.todo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.todo-check {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.todo-check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
+}
+
+.todo-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: text;
+  word-break: break-word;
+}
+
+.todo.is-done .todo-text {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.todo-del {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.todo:hover .todo-del,
+.todo:focus-within .todo-del {
+  opacity: 1;
+}
+
+.btn--sm {
+  padding: 4px 9px;
+  font-size: 13px;
+}
+
+.todo.is-editing {
+  padding: 6px 12px;
+}
+
+.todo-edit {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
+.todos-empty {
+  max-width: 640px;
+  margin: 8px auto 0;
+  text-align: center;
+  padding: 20px;
+}
+
+.todo-empty-title {
+  font-weight: 650;
+  font-size: 17px;
+  margin-bottom: 6px;
+}
+
+.todo-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.todo-count {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
+.filters {
+  display: flex;
+  gap: 4px;
+  margin: 0 auto;
+}
+
+.filter.is-active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.todo-foot .btn[aria-disabled="true"] {
+  opacity: 0.4;
+  pointer-events: none;
+}

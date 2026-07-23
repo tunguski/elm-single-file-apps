@@ -1,0 +1,6 @@
+build/
+git-deps/
+elm.vendored.local.json
+elm-stuff/
+elm.lock
+node_modules/

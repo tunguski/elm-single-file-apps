@@ -1,0 +1,1416 @@
+/*
+ * spreadsheet.css — the default stylesheet for elm-spreadsheet.
+ *
+ * Every visual is a class, so a host page can override any of it (or ship a different
+ * stylesheet entirely) without touching the Elm. The only styling the library emits
+ * inline is continuous, data-driven colour: conditional colour-scale backgrounds and
+ * data-bar fills, which no fixed class could express.
+ *
+ * Class vocabulary:
+ *   .ss-app .ss-toolbar .ss-formula-bar .ss-grid-wrap .ss-status   — app chrome
+ *   .ss-table .ss-header-row .ss-col-header .ss-row-header .ss-corner
+ *   .ss-row .ss-cell .ss-cell-content .ss-cell-input .ss-editing .ss-selected
+ *   .ss-align-left .ss-align-center .ss-align-right                — alignment
+ *   .ss-bold .ss-italic .ss-underline .ss-strike                   — text run styles
+ *   .ss-neg .ss-pos                                                — sample conditional classes
+ */
+
+:root {
+    --ss-border: #e0e0e0;
+    --ss-header-bg: #f5f6f8;
+    --ss-header-fg: #5f6368;
+    --ss-selected: #1a73e8;
+    --ss-selected-bg: rgba(26, 115, 232, 0.10);
+    --ss-accent: #1a73e8;
+    --ss-error: #d93025;
+    --ss-font: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --ss-cell-w: 92px;
+    --ss-cell-h: 26px;
+}
+
+.ss-app {
+    font-family: var(--ss-font);
+    color: #202124;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: #fff;
+}
+
+/* --- showcase page (Main.elm gallery) ----------------------------------- */
+
+body {
+    margin: 0;
+    background: #f4f6fa;
+    color: #202124;
+    font-family: var(--ss-font);
+}
+
+.page {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 0 20px 80px;
+}
+
+.page-head {
+    text-align: center;
+    padding: 46px 16px 30px;
+    background: radial-gradient(720px 300px at 50% -40%, rgba(26, 115, 232, 0.16), transparent 70%);
+}
+
+.page-hero-inner {
+    max-width: 720px;
+    margin: 0 auto;
+}
+
+.page-eyebrow {
+    display: inline-block;
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ss-accent);
+    border: 1px solid var(--ss-border);
+    background: #fff;
+    border-radius: 999px;
+    padding: 0.3rem 0.8rem;
+    margin-bottom: 1rem;
+}
+
+.page-head h1 {
+    margin: 0 0 0.5rem;
+    font-size: clamp(2rem, 5vw, 3rem);
+    letter-spacing: -0.02em;
+    color: #1f2733;
+}
+
+.page-lead {
+    max-width: 600px;
+    margin: 0 auto;
+    color: #61708a;
+    font-size: 1.05rem;
+    line-height: 1.6;
+}
+
+.gallery {
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+}
+
+.ex {
+    background: #fff;
+    border: 1px solid var(--ss-border);
+    border-radius: 14px;
+    padding: 22px 24px 26px;
+    box-shadow: 0 1px 3px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.04);
+}
+
+.ex-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.ex-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--ss-accent);
+    color: #fff;
+    font-weight: 700;
+    font-size: 14px;
+    flex: none;
+}
+
+.ex-title {
+    margin: 0;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+}
+
+.ex-blurb {
+    margin: 0 0 16px;
+    color: #4a5160;
+    font-size: 13.5px;
+    line-height: 1.6;
+}
+
+.ex-grid {
+    overflow: hidden;
+    border: 1px solid var(--ss-border);
+    border-radius: 8px;
+}
+
+.ex-async {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.btn {
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 16px;
+    border: 1px solid var(--ss-accent);
+    border-radius: 6px;
+    background: var(--ss-accent);
+    color: #fff;
+    cursor: pointer;
+    flex: none;
+}
+
+.btn:hover {
+    background: #1666c9;
+}
+
+.progress {
+    flex: 1;
+    min-width: 160px;
+    height: 8px;
+    background: #e8ebf0;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #1a73e8, #7ee3b8);
+    transition: width 0.12s linear;
+}
+
+.ex-status {
+    color: #5f6368;
+    font-size: 12px;
+    flex-basis: 100%;
+}
+
+.page-foot {
+    text-align: center;
+    margin-top: 44px;
+    padding-top: 28px;
+    border-top: 1px solid var(--ss-border);
+    color: #5f6368;
+}
+
+.tests-link {
+    display: inline-block;
+    margin: 6px 0 18px;
+    padding: 10px 22px;
+    border-radius: 8px;
+    background: #11203a;
+    color: #fff;
+    font-weight: 600;
+    font-size: 14px;
+    text-decoration: none;
+}
+
+.tests-link:hover {
+    background: #1a2f52;
+}
+
+.page-foot-meta {
+    font-size: 12.5px;
+    color: #8a909c;
+}
+
+.inline-link {
+    color: var(--ss-accent);
+    text-decoration: none;
+}
+
+.inline-link:hover {
+    text-decoration: underline;
+}
+
+/* --- formatting toolbar (example 7) ------------------------------------- */
+
+.fmt-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 14px;
+    padding: 8px 10px;
+    background: #f5f6f8;
+    border: 1px solid var(--ss-border);
+    border-radius: 8px;
+}
+
+.fmt-cell {
+    font-weight: 600;
+    color: #5f6368;
+    min-width: 32px;
+    text-align: center;
+    padding: 0 6px;
+}
+
+.fsel {
+    font: inherit;
+    font-size: 13px;
+    height: 30px;
+    padding: 0 6px;
+    border: 1px solid var(--ss-border);
+    border-radius: 6px;
+    background: #fff;
+}
+
+.fsel-sm {
+    width: 56px;
+}
+
+.fbtn {
+    font: inherit;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--ss-border);
+    border-radius: 6px;
+    background: #fff;
+    color: #3c4043;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.fbtn:hover {
+    background: #eef1f6;
+}
+
+.fbtn-on {
+    background: var(--ss-accent);
+    border-color: var(--ss-accent);
+    color: #fff;
+}
+
+.ebtn {
+    font: inherit;
+    font-size: 13px;
+    height: 30px;
+    padding: 0 12px;
+    border: 1px solid var(--ss-border);
+    border-radius: 6px;
+    background: #fff;
+    color: #3c4043;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.ebtn:hover {
+    background: #eef1f6;
+}
+
+.ebtn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.fmt-sep {
+    width: 1px;
+    align-self: stretch;
+    margin: 2px 4px;
+    background: var(--ss-border);
+}
+
+.wb-find {
+    width: 140px;
+}
+
+.wb-count {
+    font-size: 12px;
+    color: #5f6368;
+    min-width: 56px;
+}
+
+.wb-label {
+    font-size: 13px;
+    color: #3c4043;
+    font-weight: 600;
+}
+
+.wb-close {
+    margin-left: 10px;
+    height: 24px;
+    padding: 0 10px;
+}
+
+.ss-tabs {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 8px;
+}
+
+.ss-tab {
+    font: inherit;
+    font-size: 13px;
+    padding: 5px 14px;
+    border: 1px solid var(--ss-border);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    background: #eef1f6;
+    color: #3c4043;
+    cursor: pointer;
+}
+
+.ss-tab-on {
+    background: #fff;
+    color: var(--ss-accent);
+    font-weight: 600;
+    box-shadow: inset 0 -2px 0 var(--ss-accent);
+}
+
+table.pivot {
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+table.pivot th,
+table.pivot td {
+    border: 1px solid var(--ss-border);
+    padding: 3px 12px;
+    text-align: left;
+}
+
+table.pivot th {
+    background: var(--ss-header-bg);
+}
+
+.fmt-b {
+    font-weight: 800;
+}
+
+.fmt-i {
+    font-style: italic;
+}
+
+.fmt-u {
+    text-decoration: underline;
+}
+
+.fmt-s {
+    text-decoration: line-through;
+}
+
+.fcolor {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 30px;
+    padding: 0 6px;
+    border: 1px solid var(--ss-border);
+    border-radius: 6px;
+    background: #fff;
+    cursor: pointer;
+}
+
+.fcolor-lbl {
+    font-weight: 700;
+    font-size: 13px;
+    color: #3c4043;
+}
+
+.fcolor input[type="color"] {
+    width: 22px;
+    height: 22px;
+    border: none;
+    background: none;
+    padding: 0;
+    cursor: pointer;
+}
+
+/* --- presented stylesheet (example 6) ----------------------------------- */
+
+.css-panel {
+    margin-top: 14px;
+}
+
+.css-cap {
+    font-size: 12px;
+    color: #5f6368;
+    margin-bottom: 6px;
+}
+
+.code {
+    margin: 0;
+    padding: 14px 16px;
+    background: #0f1b2d;
+    color: #d6e2f0;
+    border-radius: 10px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    overflow-x: auto;
+    white-space: pre;
+}
+
+/* --- toolbar ------------------------------------------------------------- */
+
+.ss-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--ss-border);
+    background: var(--ss-header-bg);
+}
+
+.ss-title {
+    font-weight: 600;
+    margin-right: 12px;
+    color: var(--ss-accent);
+}
+
+.ss-btn {
+    font: inherit;
+    padding: 4px 12px;
+    border: 1px solid var(--ss-border);
+    border-radius: 4px;
+    background: #fff;
+    color: #3c4043;
+    cursor: pointer;
+}
+
+.ss-btn:hover {
+    background: #f1f3f4;
+}
+
+.ss-btn-active {
+    background: var(--ss-accent);
+    border-color: var(--ss-accent);
+    color: #fff;
+}
+
+/* --- formula bar --------------------------------------------------------- */
+
+.ss-formula-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--ss-border);
+}
+
+.ss-cell-ref {
+    min-width: 56px;
+    padding: 4px 8px;
+    font-weight: 600;
+    text-align: center;
+    border: 1px solid var(--ss-border);
+    border-radius: 4px;
+    background: #fff;
+}
+
+.ss-formula-input {
+    flex: 1;
+    font: inherit;
+    padding: 5px 8px;
+    border: 1px solid var(--ss-border);
+    border-radius: 4px;
+}
+
+.ss-formula-input:focus {
+    outline: none;
+    border-color: var(--ss-accent);
+    box-shadow: 0 0 0 1px var(--ss-accent);
+}
+
+/* --- grid ---------------------------------------------------------------- */
+
+.ss-grid-wrap {
+    flex: 1;
+    overflow: auto;
+}
+
+.ss-table {
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.ss-corner,
+.ss-col-header,
+.ss-row-header {
+    background: var(--ss-header-bg);
+    color: var(--ss-header-fg);
+    font-weight: 500;
+    border: 1px solid var(--ss-border);
+    text-align: center;
+    position: sticky;
+    user-select: none;
+}
+
+.ss-col-header {
+    top: 0;
+    height: var(--ss-cell-h);
+    position: sticky;
+    overflow: visible;
+}
+
+.ss-col-label {
+    display: block;
+    pointer-events: none;
+}
+
+/* Drag handle on the right edge of each column header. */
+.ss-resize {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 7px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 3;
+}
+
+.ss-resize:hover,
+.ss-resize:active {
+    background: var(--ss-accent);
+    opacity: 0.5;
+}
+
+/* The focusable, scrolling grid container: hide the native outline (selection shows
+   focus) and own the scroll viewport (row virtualisation depends on this scrolling). */
+.ss-grid-focus {
+    outline: none;
+    max-height: 540px;
+    overflow: auto;
+}
+
+.ss-grid-focus:focus,
+.ss-grid-focus:focus-visible {
+    outline: none;
+}
+
+/* An off-screen, focusable sentinel that lets the grid reclaim keyboard focus after an edit
+   commits (for hosts that can't issue a focus command). Zero footprint, never visible. */
+.ss-nav-focus {
+    position: absolute;
+    width: 0;
+    height: 0;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    opacity: 0;
+    outline: none;
+    pointer-events: none;
+}
+
+/* Rows are a fixed height so the host can map a scroll offset to a first-visible row;
+   this MUST match Spreadsheet.View.rowHeight (28px). */
+.ss-row,
+.ss-header-row {
+    height: 28px;
+}
+
+.ss-spacer td {
+    padding: 0;
+    border: 0;
+}
+
+.ss-row-header {
+    left: 0;
+    min-width: 40px;
+}
+
+.ss-corner {
+    top: 0;
+    left: 0;
+    z-index: 2;
+    min-width: 40px;
+}
+
+.ss-cell {
+    border: 1px solid var(--ss-border);
+    padding: 0;
+    height: var(--ss-cell-h);
+    width: var(--ss-cell-w);
+    max-width: var(--ss-cell-w);
+    overflow: hidden;
+    cursor: cell;
+    background: #fff;
+    user-select: none;
+}
+
+.ss-cell.ss-in-range {
+    background: var(--ss-selected-bg);
+    box-shadow: inset 0 0 0 1px var(--ss-selected);
+}
+
+/* A cell whose value violates its data-validation rule. */
+.ss-cell.ss-invalid {
+    box-shadow: inset 0 0 0 2px #d93025;
+}
+
+/* A search hit. */
+.ss-cell.ss-find {
+    background: #fff3a3;
+}
+
+/* A note marker: a small triangle in the top-right corner. */
+.ss-cell.ss-noted .ss-note-dot {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 0;
+    height: 0;
+    border-top: 6px solid #f9ab00;
+    border-left: 6px solid transparent;
+}
+
+.ss-cell {
+    position: relative;
+}
+
+/* An icon-set conditional-format glyph, shown before the value. */
+.ss-cf-icon {
+    display: inline-block;
+    margin-right: 4px;
+    font-size: 11px;
+    line-height: 1;
+}
+
+/* A cell that a dynamic array spilled into (a non-anchor result cell). */
+.ss-cell.ss-spilled {
+    background: #f3f8ff;
+}
+
+/* The anchor of a live spill: a subtle left accent marks where the array starts. */
+.ss-cell.ss-spill-anchor {
+    box-shadow: inset 2px 0 0 #1a73e8;
+}
+
+/* The dropdown caret shown on a list-validation cell. */
+.ss-dd-caret {
+    position: absolute;
+    right: 2px;
+    bottom: 0;
+    font-size: 9px;
+    color: #5f6368;
+    pointer-events: none;
+}
+
+.ss-cell-select {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    font: inherit;
+    background: #fff;
+}
+
+/* A frozen column stays put while the grid scrolls sideways. */
+.ss-frozen-col {
+    position: sticky;
+    z-index: 3;
+    background: #fff;
+    box-shadow: 1px 0 0 var(--ss-border);
+}
+
+th.ss-frozen-col {
+    z-index: 5;
+    background: var(--ss-header-bg);
+}
+
+/* A frozen row stays put (below the header) while the grid scrolls vertically. */
+.ss-frozen-row {
+    position: sticky;
+    z-index: 2;
+}
+
+.ss-frozen-row .ss-cell,
+.ss-frozen-row .ss-row-header {
+    background: #f8fafd;
+}
+
+/* In-cell sparklines (plain divs, no SVG). */
+.ss-spark {
+    display: flex;
+    align-items: flex-end;
+    gap: 1px;
+    height: 100%;
+    padding: 2px 3px;
+    box-sizing: border-box;
+}
+
+.ss-spark-bar {
+    flex: 1 1 0;
+    min-width: 2px;
+    border-radius: 1px;
+}
+
+.ss-spark-col {
+    flex: 1 1 0;
+    display: flex;
+    justify-content: center;
+}
+
+.ss-spark-dot {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+}
+
+/* Charts (CSS-only: flex bars, conic-gradient pie, clip-path area). */
+.ss-charts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.ss-charts .ss-chart {
+    flex: 1 1 240px;
+}
+
+.ss-chart {
+    margin-top: 14px;
+    padding: 14px 16px;
+    border: 1px solid var(--ss-border);
+    border-radius: 10px;
+    background: #fff;
+}
+
+.ss-chart-title {
+    font-weight: 600;
+    color: #3c4043;
+    margin-bottom: 10px;
+}
+
+.ss-chart-cols {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    height: 140px;
+}
+
+.ss-chart-colwrap {
+    flex: 1 1 0;
+    height: 100%;
+    display: flex;
+    align-items: flex-end;
+}
+
+.ss-chart-col {
+    width: 100%;
+    border-radius: 3px 3px 0 0;
+    min-height: 2px;
+}
+
+.ss-chart-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.ss-chart-barrow {
+    height: 16px;
+}
+
+.ss-chart-bar {
+    height: 100%;
+    border-radius: 0 3px 3px 0;
+    min-width: 2px;
+}
+
+.ss-chart-pie {
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    margin: 0 auto;
+}
+
+.ss-chart-line {
+    position: relative;
+    height: 140px;
+    background: linear-gradient(#fafbfd, #fafbfd);
+    border-bottom: 1px solid var(--ss-border);
+}
+
+.ss-chart-area {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to bottom, rgba(26, 115, 232, 0.55), rgba(26, 115, 232, 0.10));
+}
+
+.ss-chart-filled {
+    background: linear-gradient(to bottom, rgba(26, 115, 232, 0.85), rgba(26, 115, 232, 0.30));
+}
+
+/* Axis gridlines drawn behind a cartesian chart. */
+.ss-chart-plot {
+    position: relative;
+}
+
+.ss-chart-grid {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.ss-chart-gridline {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: 1px dashed #e8eaed;
+}
+
+/* Scatter plot: absolutely-positioned dots over the plot area. */
+.ss-chart-scatter {
+    position: relative;
+    height: 140px;
+    background: #fafbfd;
+    border-bottom: 1px solid var(--ss-border);
+}
+
+.ss-chart-dot {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    margin: -4px 0 0 -4px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px #fff;
+}
+
+.ss-chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 12px;
+    font-size: 12px;
+    color: #5f6368;
+}
+
+.ss-chart-key {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.ss-chart-swatch {
+    width: 11px;
+    height: 11px;
+    border-radius: 2px;
+}
+
+.ss-cell-content {
+    padding: 3px 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ss-cell.ss-selected {
+    outline: 2px solid var(--ss-selected);
+    outline-offset: -2px;
+    background: var(--ss-selected-bg);
+}
+
+.ss-editing {
+    outline: 2px solid var(--ss-selected);
+    outline-offset: -2px;
+}
+
+.ss-cell-input {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    border: none;
+    font: inherit;
+    padding: 3px 6px;
+}
+
+.ss-cell-input:focus {
+    outline: none;
+}
+
+/* --- alignment & text runs ---------------------------------------------- */
+
+.ss-align-left {
+    text-align: left;
+}
+
+.ss-align-center {
+    text-align: center;
+}
+
+.ss-align-right {
+    text-align: right;
+}
+
+.ss-bold {
+    font-weight: 700;
+}
+
+.ss-italic {
+    font-style: italic;
+}
+
+.ss-underline {
+    text-decoration: underline;
+}
+
+.ss-strike {
+    text-decoration: line-through;
+}
+
+/* --- sample conditional-format classes ---------------------------------- */
+
+.ss-neg {
+    color: var(--ss-error);
+}
+
+.ss-pos {
+    color: #188038;
+}
+
+/* --- status bar ---------------------------------------------------------- */
+
+.ss-status {
+    display: flex;
+    justify-content: space-between;
+    padding: 5px 12px;
+    border-top: 1px solid var(--ss-border);
+    background: var(--ss-header-bg);
+    color: var(--ss-header-fg);
+    font-size: 12px;
+}
+
+/* ---- SheetDoc: the spreadsheet as a workspace document (editor pane) ---- */
+.sheetdoc { display: flex; flex-direction: column; gap: 8px; }
+.sheetdoc-marker {
+    align-self: flex-start;
+    font-size: 12px;
+    color: var(--ws-accent);
+    background: #eef1ff;
+    border-radius: 999px;
+    padding: 2px 10px;
+}
+.sheetdoc .ss-grid-focus { max-height: 70vh; overflow: auto; border: 1px solid var(--ws-border); border-radius: 8px; }
+.sheetdoc .ss-grid-focus:focus { outline: 2px solid var(--ws-accent); outline-offset: -2px; }
+
+/* ============================================================================
+   APPLICATION CHROME — menu bar, toolbar, dialogs (Spreadsheet.Chrome)
+   ========================================================================== */
+
+/* --- Menu bar ------------------------------------------------------------- */
+.ss-menubar {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    gap: 1px;
+    padding: 0 6px;
+    background: #fff;
+    border: 1px solid var(--ss-border);
+    border-radius: 8px 8px 0 0;
+    font-family: var(--ss-font);
+    font-size: 13px;
+    user-select: none;
+}
+
+.ss-menu {
+    position: relative;
+}
+
+.ss-menu-label {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    padding: 7px 10px;
+    font: inherit;
+    color: #3c4043;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.ss-menu-label:hover {
+    background: #f1f3f4;
+}
+
+.ss-menu-label-open {
+    background: var(--ss-selected-bg);
+    color: var(--ss-accent);
+}
+
+/* The click-away layer under an open menu. */
+.ss-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+}
+
+.ss-menu-panel,
+.ss-menu-subpanel {
+    position: absolute;
+    z-index: 50;
+    min-width: 220px;
+    padding: 6px 0;
+    background: #fff;
+    border: 1px solid var(--ss-border);
+    border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+
+.ss-menu-panel {
+    top: calc(100% + 2px);
+    left: 0;
+}
+
+.ss-menu-item {
+    appearance: none;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 14px;
+    font: inherit;
+    font-size: 13px;
+    color: #3c4043;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ss-menu-item:hover {
+    background: #f1f3f4;
+}
+
+.ss-menu-item:disabled {
+    color: #bdc1c6;
+    cursor: default;
+    background: transparent;
+}
+
+.ss-menu-item-label {
+    flex: 1;
+}
+
+.ss-menu-item-shortcut {
+    color: #80868b;
+    font-size: 12px;
+}
+
+.ss-menu-check {
+    width: 14px;
+    color: var(--ss-accent);
+    text-align: center;
+}
+
+.ss-menu-divider {
+    height: 1px;
+    margin: 6px 0;
+    background: var(--ss-border);
+}
+
+/* Sub-menus reveal their panel on hover. */
+.ss-menu-sub {
+    position: relative;
+}
+
+.ss-menu-subpanel {
+    top: -6px;
+    left: 100%;
+    display: none;
+}
+
+.ss-menu-sub:hover > .ss-menu-subpanel {
+    display: block;
+}
+
+/* --- Toolbar -------------------------------------------------------------- */
+.ss-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 5px 8px;
+    background: #f8f9fa;
+    border: 1px solid var(--ss-border);
+    border-top: 0;
+    font-family: var(--ss-font);
+}
+
+.ss-tool {
+    appearance: none;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    font-size: 14px;
+    color: #3c4043;
+    cursor: pointer;
+}
+
+.ss-tool:hover {
+    background: #e8eaed;
+}
+
+.ss-tool:disabled {
+    color: #bdc1c6;
+    cursor: default;
+    background: transparent;
+}
+
+.ss-tool-on {
+    background: var(--ss-selected-bg);
+    color: var(--ss-accent);
+}
+
+.ss-tool-pick {
+    height: 28px;
+    border: 1px solid var(--ss-border);
+    border-radius: 6px;
+    background: #fff;
+    font-family: var(--ss-font);
+    font-size: 13px;
+    color: #3c4043;
+    padding: 0 4px;
+}
+
+.ss-tool-gap {
+    width: 1px;
+    height: 20px;
+    margin: 0 5px;
+    background: var(--ss-border);
+}
+
+/* --- Dialogs -------------------------------------------------------------- */
+.ss-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(32, 33, 36, 0.5);
+}
+
+.ss-dialog {
+    width: min(460px, 92vw);
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+    font-family: var(--ss-font);
+    overflow: hidden;
+}
+
+.ss-dialog-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--ss-border);
+}
+
+.ss-dialog-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 500;
+    color: #202124;
+}
+
+.ss-dialog-x {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    font-size: 15px;
+    color: #5f6368;
+    cursor: pointer;
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+}
+
+.ss-dialog-x:hover {
+    background: #f1f3f4;
+}
+
+.ss-dialog-body {
+    padding: 18px;
+    font-size: 13px;
+    color: #3c4043;
+    line-height: 1.5;
+    max-height: 60vh;
+    overflow: auto;
+}
+
+.ss-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 18px;
+    border-top: 1px solid var(--ss-border);
+}
+
+/* Buttons & chips reused inside dialog bodies/footers. */
+.ss-dlg-btn {
+    appearance: none;
+    border: 1px solid var(--ss-border);
+    background: #fff;
+    border-radius: 6px;
+    padding: 7px 14px;
+    font: inherit;
+    font-size: 13px;
+    color: #3c4043;
+    cursor: pointer;
+}
+
+.ss-dlg-btn:hover {
+    background: #f1f3f4;
+}
+
+.ss-dlg-btn-primary {
+    background: var(--ss-accent);
+    border-color: var(--ss-accent);
+    color: #fff;
+}
+
+.ss-dlg-btn-primary:hover {
+    filter: brightness(1.05);
+}
+
+.ss-dlg-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* The little on/off config strip above the demo. */
+.ss-ui-config {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 6px 2px;
+    font-family: var(--ss-font);
+    font-size: 13px;
+    color: #5f6368;
+}
+
+.ss-ui-config label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+/* Rendered multi-field pivot table (the science demo panel). */
+.ss-pivottable {
+    border-collapse: collapse;
+    font-size: 12px;
+    font-family: var(--ss-font);
+}
+
+.ss-pivottable th,
+.ss-pivottable td {
+    border: 1px solid var(--ss-border);
+    padding: 3px 10px;
+    text-align: right;
+}
+
+.ss-pivottable th {
+    background: var(--ss-header-bg);
+    color: var(--ss-header-fg);
+    font-weight: 600;
+}
+
+.ss-pivottable td:first-child,
+.ss-pivottable th:first-child {
+    text-align: left;
+}
+
+/* ---- cross-document references (external data) ----------------------------- */
+.sheetdoc-refs {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border: 1px solid #e2e8f2;
+    border-radius: 8px;
+    background: #fafbfe;
+    max-width: 640px;
+}
+
+.sheetdoc-refs-title {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: #35507e;
+}
+
+.sheetdoc-refs-empty {
+    margin: 0 0 10px;
+    font-size: 12px;
+    color: #6a748a;
+}
+
+.sheetdoc-refs-list {
+    list-style: none;
+    margin: 0 0 10px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sheetdoc-ref-item {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    font-size: 12px;
+}
+
+.sheetdoc-ref-binding {
+    color: #4655d6;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.sheetdoc-ref-arrow {
+    color: #6a748a;
+}
+
+.sheetdoc-ref-target {
+    flex: 1;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    color: #1f2733;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sheetdoc-ref-x {
+    border: none;
+    background: none;
+    color: #b3261e;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.sheetdoc-refs-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.sheetdoc-ref-in {
+    border: 1px solid #d7dbe6;
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 12px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.sheetdoc-ref-in:focus {
+    outline: none;
+    border-color: #5b6ef5;
+}
+
+.sheetdoc-ref-add {
+    border: 1px solid #5b6ef5;
+    background: #eef0fe;
+    color: #4655d6;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    cursor: pointer;
+}

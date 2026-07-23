@@ -1,0 +1,112 @@
+name: Build, smoke-test & deploy to GitHub Pages
+
+# Compiles all six single-file apps + the showcase to standalone self-saving HTML files, boots each
+# one headlessly in jsdom (so a broken app can't ship), and publishes them to
+# https://tunguski.github.io/elm-single-file-apps/.
+#
+# The apps are written for the elm-lang compiler (github.com/tunguski/elm-lang), which lives in a
+# separate repo, so we check it out, package it into a runnable elm.jar, then run build.sh. The
+# spreadsheet's vendored engine (elm-spreadsheet + elm-workspace) is resolved from git by the
+# compiler at build time (see sheet/elm.vendored.json).
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out elm-single-file-apps
+        uses: actions/checkout@v4
+
+      - name: Check out the elm-lang compiler
+        uses: actions/checkout@v4
+        with:
+          repository: tunguski/elm-lang
+          ref: master
+          path: elm-lang
+
+      - name: Set up GraalVM for JDK 25
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          cache: 'maven'
+          cache-dependency-path: elm-lang/pom.xml
+
+      - name: Build the elm compiler (elm.jar)
+        working-directory: elm-lang
+        run: |
+          chmod +x ./mvnw
+          ./mvnw -B -ntp clean package -DskipTests
+
+      - name: Build all apps + showcase
+        run: |
+          chmod +x ./build.sh
+          ELM="java -jar $GITHUB_WORKSPACE/elm-lang/target/elm.jar" ./build.sh
+
+      - name: Smoke-test each app in jsdom (gates the deploy)
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm i jsdom >/dev/null 2>&1
+          fail=0
+          for app in notes todos wiki sudoku calendar spreadsheet; do
+            if node tools/verify.mjs "build/$app.html" >/dev/null 2>&1; then
+              echo "  ✓ $app"
+            else
+              echo "::error::$app failed to boot / round-trip"
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ] || exit 1
+
+      - name: Assemble public/ and stamp the build
+        run: |
+          mkdir -p public
+          cp build/*.html public/
+          SHA=$(git rev-parse --short HEAD)
+          WHEN=$(date -u '+%Y-%m-%d %H:%M UTC')
+          export STAMP="built $WHEN · $SHA"
+          # -0777 slurps the whole file (compiled HTML contains a NUL byte; -0 would split on it).
+          find public -name '*.html' -print0 | xargs -0 -r perl -0777 -pi -e '
+            my $t = $ENV{STAMP};
+            my $s = "<script>(function(){function a(){"
+                  . "if(document.getElementById(\"build-stamp\"))return;"
+                  . "var d=document.createElement(\"div\");d.id=\"build-stamp\";d.textContent=\"$t\";"
+                  . "d.style.cssText=\"position:fixed;bottom:4px;left:6px;z-index:2147483647;"
+                  . "font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;color:rgba(97,112,138,.6);"
+                  . "pointer-events:none\";(document.documentElement||document.body).appendChild(d);}"
+                  . "if(document.readyState!=\"loading\")a();"
+                  . "else document.addEventListener(\"DOMContentLoaded\",a);})();<\/script>";
+            if    (s#</body>#$s</body>#) {}
+            elsif (s#</html>#$s</html>#) {}
+            else  { $_ .= $s }
+          '
+          ls -la public
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

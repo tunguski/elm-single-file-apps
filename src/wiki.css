@@ -1,0 +1,89 @@
+/* wiki.css — Wiki-app specifics: link styling and the rendered document. Uses the shared theme
+   variables so light and dark both work. */
+
+.wiki-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+
+.wiki-title {
+  font-size: 22px;
+  font-weight: 650;
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiki-actions {
+  flex: 0 0 auto;
+}
+
+/* rendered document */
+
+.wiki-doc {
+  overflow: auto;
+}
+
+.wiki-h1 {
+  font-size: 20px;
+  font-weight: 650;
+  margin: 18px 0 6px;
+}
+
+.wiki-h1:first-child {
+  margin-top: 0;
+}
+
+.wiki-h2 {
+  font-size: 16px;
+  font-weight: 650;
+  margin: 14px 0 4px;
+  color: var(--muted);
+}
+
+.wiki-line {
+  margin: 0 0 2px;
+}
+
+.wiki-blank {
+  height: 12px;
+}
+
+/* wiki links */
+
+.wiki-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.wiki-link:hover {
+  border-bottom-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.wiki-link--new {
+  color: var(--muted);
+  border-bottom: 1px dashed var(--muted);
+}
+
+.wiki-link--new:hover {
+  color: var(--text);
+  border-bottom-color: var(--text);
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+}
+
+/* edit-mode source: monospace so the [[ ]] markup is easy to see */
+
+.wiki-source {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
