@@ -3,23 +3,31 @@ module Sudoku exposing (main)
 {-| **Sudoku** — a playable 9x9 Sudoku. Click a cell (or arrow-key to it), type 1–9 to fill it,
 toggle pencil-mark mode to jot candidates, and watch conflicts light up red. Puzzles come from a
 small fixed bank; "New puzzle" cycles through them. The whole in-progress game — which puzzle,
-your entries and pencil marks — lives in the file itself and round-trips on Ctrl+S. See [`App`](App).
+your entries and pencil marks — lives in the file itself and round-trips on Ctrl+S.
+
+This app also talks to an optional **backend** ([`server/SudokuServer.elm`](server/SudokuServer.elm)):
+each solve is timed and POSTed so the server can keep a per-player history. The player is identified
+by a UUID minted when the file is first opened ([`App.Env`](App).newId) and **kept in the file** — so
+your identity survives Ctrl+S, but a never-saved file gets a fresh one each open. See [`App`](App).
 -}
 
 import App exposing (Env)
 import Browser.Events
 import Dict exposing (Dict)
-import Html exposing (Html, button, div, span, text)
-import Html.Attributes exposing (class, classList)
-import Html.Events exposing (onClick)
+import Html exposing (Html, a, button, div, input, span, text)
+import Html.Attributes exposing (class, classList, href, placeholder, target, value)
+import Html.Events exposing (onClick, onInput)
+import Http
 import Json.Decode as D
 import Json.Encode as E
 import Set exposing (Set)
+import Task
+import Time
 
 
 main : Program () (App.State Model) (App.Event Msg)
 main =
-    App.program
+    App.programEffect
         { init = init
         , update = update
         , view = view
@@ -39,17 +47,43 @@ type alias Model =
     , marks : Dict Int (Set Int)
     , selected : Maybe Int
     , pencil : Bool
+
+    -- backend sync (playerId / serverUrl / startedAt / solvedPosted persist; sync is transient)
+    , playerId : String
+    , serverUrl : String
+    , startedAt : Maybe Int
+    , solvedPosted : Bool
+    , sync : Sync
     }
 
 
-init : Env -> Model
-init _ =
-    { puzzleIndex = 0
-    , entries = Dict.empty
-    , marks = Dict.empty
-    , selected = Nothing
-    , pencil = False
-    }
+type Sync
+    = Idle
+    | Syncing
+    | Synced Int Int -- games count, total ms
+    | Failed
+
+
+defaultServerUrl : String
+defaultServerUrl =
+    "http://localhost:8080"
+
+
+init : Env -> ( Model, Cmd Msg )
+init env =
+    ( { puzzleIndex = 0
+      , entries = Dict.empty
+      , marks = Dict.empty
+      , selected = Nothing
+      , pencil = False
+      , playerId = env.newId
+      , serverUrl = defaultServerUrl
+      , startedAt = Nothing
+      , solvedPosted = False
+      , sync = Idle
+      }
+    , Cmd.none
+    )
 
 
 
@@ -221,6 +255,11 @@ isSolved givens model =
         && Set.isEmpty (conflictSet givens model)
 
 
+hasProgress : Model -> Bool
+hasProgress model =
+    not (Dict.isEmpty model.entries)
+
+
 
 -- UPDATE ---------------------------------------------------------------------
 
@@ -233,83 +272,173 @@ type Msg
     | TogglePencil
     | NewPuzzle
     | ResetPuzzle
+    | StartedAt Int
+    | SolvedAt Int
+    | GotSync (Result Http.Error Summary)
+    | SetServerUrl String
+    | RefreshStats
 
 
-update : Msg -> Model -> Model
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         SelectCell i ->
-            { model | selected = Just i }
+            ( { model | selected = Just i }, Cmd.none )
 
         PadDigit d ->
-            applyDigit d model
+            afterMove (applyDigit d model)
 
         ClearCell ->
-            clearSelected model
+            ( clearSelected model, Cmd.none )
 
         TogglePencil ->
-            { model | pencil = not model.pencil }
+            ( { model | pencil = not model.pencil }, Cmd.none )
 
         NewPuzzle ->
-            { model
+            ( { model
                 | puzzleIndex = modBy bankSize (model.puzzleIndex + 1)
                 , entries = Dict.empty
                 , marks = Dict.empty
                 , selected = Nothing
-            }
+                , startedAt = Nothing
+                , solvedPosted = False
+              }
+            , Cmd.none
+            )
 
         ResetPuzzle ->
-            { model | entries = Dict.empty, marks = Dict.empty }
+            ( { model
+                | entries = Dict.empty
+                , marks = Dict.empty
+                , startedAt = Nothing
+                , solvedPosted = False
+              }
+            , Cmd.none
+            )
 
         KeyPress key ->
             handleKey key model
 
+        StartedAt t ->
+            ( case model.startedAt of
+                Just _ ->
+                    model
 
-handleKey : String -> Model -> Model
+                Nothing ->
+                    { model | startedAt = Just t }
+            , Cmd.none
+            )
+
+        SolvedAt t ->
+            onSolved t model
+
+        GotSync result ->
+            ( { model | sync = syncFromResult result }, Cmd.none )
+
+        SetServerUrl url ->
+            ( { model | serverUrl = url }, Cmd.none )
+
+        RefreshStats ->
+            if String.trim model.serverUrl == "" || String.trim model.playerId == "" then
+                ( model, Cmd.none )
+
+            else
+                ( { model | sync = Syncing }, getStats model )
+
+
+handleKey : String -> Model -> ( Model, Cmd Msg )
 handleKey key model =
     case key of
         "Backspace" ->
-            clearSelected model
+            ( clearSelected model, Cmd.none )
 
         "Delete" ->
-            clearSelected model
+            ( clearSelected model, Cmd.none )
 
         "0" ->
-            clearSelected model
+            ( clearSelected model, Cmd.none )
 
         "p" ->
-            { model | pencil = not model.pencil }
+            ( { model | pencil = not model.pencil }, Cmd.none )
 
         "P" ->
-            { model | pencil = not model.pencil }
+            ( { model | pencil = not model.pencil }, Cmd.none )
 
         "ArrowUp" ->
-            moveSelection -9 model
+            ( moveSelection -9 model, Cmd.none )
 
         "ArrowDown" ->
-            moveSelection 9 model
+            ( moveSelection 9 model, Cmd.none )
 
         "ArrowLeft" ->
-            moveSelection -1 model
+            ( moveSelection -1 model, Cmd.none )
 
         "ArrowRight" ->
-            moveSelection 1 model
+            ( moveSelection 1 model, Cmd.none )
 
         _ ->
             case String.toInt key of
                 Just d ->
                     if d >= 1 && d <= 9 then
-                        applyDigit d model
+                        afterMove (applyDigit d model)
 
                     else
-                        model
+                        ( model, Cmd.none )
 
                 Nothing ->
-                    model
+                    ( model, Cmd.none )
 
 
-{-| Move the selection by a delta, clamped so it never leaves the 9×9 board and rows don't wrap.
+{-| After a cell-filling move, drive the timing/sync effects: start the clock on the first real entry
+(`Time.now` → [`StartedAt`](#Msg)), and when the board becomes solved, stamp the finish time
+(`Time.now` → [`SolvedAt`](#Msg)) which then POSTs the game.
 -}
+afterMove : Model -> ( Model, Cmd Msg )
+afterMove model =
+    let
+        givens =
+            givensFor model.puzzleIndex
+
+        solved =
+            isSolved givens model
+
+        startCmd =
+            if model.startedAt == Nothing && hasProgress model then
+                requestNow StartedAt
+
+            else
+                Cmd.none
+
+        solveCmd =
+            if solved && not model.solvedPosted then
+                requestNow SolvedAt
+
+            else
+                Cmd.none
+    in
+    ( model, Cmd.batch [ startCmd, solveCmd ] )
+
+
+onSolved : Int -> Model -> ( Model, Cmd Msg )
+onSolved finishedAt model =
+    let
+        start =
+            Maybe.withDefault finishedAt model.startedAt
+
+        elapsed =
+            max 0 (finishedAt - start)
+
+        next =
+            { model | solvedPosted = True, sync = Syncing }
+    in
+    ( next, postGame next elapsed finishedAt )
+
+
+requestNow : (Int -> Msg) -> Cmd Msg
+requestNow toMsg =
+    Task.perform (\posix -> toMsg (Time.posixToMillis posix)) Time.now
+
+
 moveSelection : Int -> Model -> Model
 moveSelection delta model =
     let
@@ -393,6 +522,70 @@ clearSelected model =
 
 
 
+-- BACKEND --------------------------------------------------------------------
+
+
+type alias Summary =
+    { count : Int, totalMs : Int }
+
+
+summaryDecoder : D.Decoder Summary
+summaryDecoder =
+    D.map2 Summary
+        (D.field "count" D.int)
+        (D.field "totalMs" D.int)
+
+
+syncFromResult : Result Http.Error Summary -> Sync
+syncFromResult result =
+    case result of
+        Ok s ->
+            Synced s.count s.totalMs
+
+        Err _ ->
+            Failed
+
+
+{-| Drop a trailing slash so `base ++ "/games"` never doubles up. -}
+apiBase : Model -> String
+apiBase model =
+    if String.endsWith "/" model.serverUrl then
+        String.dropRight 1 model.serverUrl
+
+    else
+        model.serverUrl
+
+
+postGame : Model -> Int -> Int -> Cmd Msg
+postGame model elapsedMs solvedAt =
+    if String.trim model.serverUrl == "" || String.trim model.playerId == "" then
+        Cmd.none
+
+    else
+        Http.post
+            { url = apiBase model ++ "/games"
+            , body =
+                Http.jsonBody
+                    (E.object
+                        [ ( "playerId", E.string model.playerId )
+                        , ( "puzzleIndex", E.int model.puzzleIndex )
+                        , ( "elapsedMs", E.int elapsedMs )
+                        , ( "solvedAt", E.int solvedAt )
+                        ]
+                    )
+            , expect = Http.expectJson GotSync summaryDecoder
+            }
+
+
+getStats : Model -> Cmd Msg
+getStats model =
+    Http.get
+        { url = apiBase model ++ "/games?playerId=" ++ model.playerId
+        , expect = Http.expectJson GotSync summaryDecoder
+        }
+
+
+
 -- SUBSCRIPTIONS --------------------------------------------------------------
 
 
@@ -445,6 +638,7 @@ view model =
                 , div [ class "sk-side" ]
                     [ statusView solved model
                     , padView model
+                    , syncView model
                     , helpView
                     ]
                 ]
@@ -564,6 +758,97 @@ padView model =
         )
 
 
+syncView : Model -> Html Msg
+syncView model =
+    div [ class "sk-sync" ]
+        [ div [ class "sk-sync-row" ]
+            [ span [ class "muted" ] [ text "Player " ]
+            , span [ class "kbd" ] [ text (String.left 8 model.playerId) ]
+            ]
+        , div [ class "sk-sync-status" ] [ syncBadge model.sync ]
+        , input
+            [ class "sk-sync-url"
+            , placeholder "backend URL (e.g. http://localhost:8080)"
+            , value model.serverUrl
+            , onInput SetServerUrl
+            ]
+            []
+        , div [ class "sk-sync-actions" ]
+            [ button [ class "btn btn--ghost", onClick RefreshStats ] [ text "Refresh my stats" ]
+            , viewLeaderboardLink model
+            ]
+        ]
+
+
+viewLeaderboardLink : Model -> Html Msg
+viewLeaderboardLink model =
+    if String.trim model.serverUrl == "" then
+        text ""
+
+    else
+        a [ class "btn btn--ghost", href (apiBase model ++ "/"), target "_blank" ]
+            [ text "Leaderboard ↗" ]
+
+
+syncBadge : Sync -> Html Msg
+syncBadge sync =
+    case sync of
+        Idle ->
+            span [ class "muted" ] [ text "Solve a puzzle to record it." ]
+
+        Syncing ->
+            span [ class "muted" ] [ text "Syncing…" ]
+
+        Synced count totalMs ->
+            span [ class "sk-sync-ok" ]
+                [ text
+                    ("✔ "
+                        ++ String.fromInt count
+                        ++ pluralGames count
+                        ++ " · "
+                        ++ fmtDuration totalMs
+                        ++ " total"
+                    )
+                ]
+
+        Failed ->
+            span [ class "sk-sync-fail" ] [ text "⚠ Couldn't reach the backend (still saved locally)." ]
+
+
+pluralGames : Int -> String
+pluralGames n =
+    if n == 1 then
+        " game"
+
+    else
+        " games"
+
+
+fmtDuration : Int -> String
+fmtDuration ms =
+    let
+        totalSec =
+            ms // 1000
+
+        h =
+            totalSec // 3600
+
+        m =
+            modBy 60 (totalSec // 60)
+
+        s =
+            modBy 60 totalSec
+    in
+    if h > 0 then
+        String.fromInt h ++ "h " ++ String.fromInt m ++ "m"
+
+    else if m > 0 then
+        String.fromInt m ++ "m " ++ String.fromInt s ++ "s"
+
+    else
+        String.fromInt s ++ "s"
+
+
 helpView : Html Msg
 helpView =
     div [ class "sk-help muted" ]
@@ -588,23 +873,66 @@ encode model =
         [ ( "puzzleIndex", E.int model.puzzleIndex )
         , ( "entries", E.dict String.fromInt E.int model.entries )
         , ( "marks", E.dict String.fromInt (\s -> E.list E.int (Set.toList s)) model.marks )
+        , ( "playerId", E.string model.playerId )
+        , ( "serverUrl", E.string model.serverUrl )
+        , ( "startedAt", maybeInt model.startedAt )
+        , ( "solvedPosted", E.bool model.solvedPosted )
         ]
 
 
+maybeInt : Maybe Int -> E.Value
+maybeInt m =
+    case m of
+        Just n ->
+            E.int n
+
+        Nothing ->
+            E.null
+
+
 decoder : Env -> D.Decoder Model
-decoder _ =
-    D.map3
-        (\idx entries marks ->
+decoder env =
+    D.map7
+        (\idx entries marks pid url started posted ->
             { puzzleIndex = modBy bankSize (max 0 idx)
             , entries = entries
             , marks = marks
             , selected = Nothing
             , pencil = False
+            , playerId =
+                if String.trim pid == "" then
+                    env.newId
+
+                else
+                    pid
+            , serverUrl =
+                if String.trim url == "" then
+                    defaultServerUrl
+
+                else
+                    url
+            , startedAt =
+                case started of
+                    Just t ->
+                        Just t
+
+                    Nothing ->
+                        if Dict.isEmpty entries then
+                            Nothing
+
+                        else
+                            Just env.now
+            , solvedPosted = posted
+            , sync = Idle
             }
         )
         (D.oneOf [ D.field "puzzleIndex" D.int, D.succeed 0 ])
         (D.oneOf [ D.field "entries" intKeyedDict, D.succeed Dict.empty ])
         (D.oneOf [ D.field "marks" intKeyedMarks, D.succeed Dict.empty ])
+        (D.oneOf [ D.field "playerId" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "serverUrl" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "startedAt" (D.nullable D.int), D.succeed Nothing ])
+        (D.oneOf [ D.field "solvedPosted" D.bool, D.succeed False ])
 
 
 {-| Decode a JSON object with integer-as-string keys into a `Dict Int Int`.

@@ -15,7 +15,7 @@ database, no `localStorage` — the file _is_ the document (the TiddlyWiki idea,
 | 🗒️ **Notes** | A two-pane note keeper with search. |
 | ✅ **Todos** | A to-do list with filters, inline edit and a live remaining count. |
 | 📚 **Wiki** | Interlinked plain-text pages with `[[wiki-links]]` that create pages on click. |
-| 🔢 **Sudoku** | Playable Sudoku — keyboard entry, pencil marks, conflict highlighting, a puzzle bank. |
+| 🔢 **Sudoku** | Playable Sudoku — keyboard entry, pencil marks, conflict highlighting, a puzzle bank. Optionally syncs solved games to the [Elm backend](#optional-backend--the-sudoku-history-server). |
 | 📅 **Calendar** | A month view with events; all date math is pure (no `Time` effects). |
 | 📊 **Spreadsheet** | The real [elm-spreadsheet](https://github.com/tunguski/elm-spreadsheet) engine (~120 formula functions) driven through the same harness. |
 
@@ -83,6 +83,66 @@ node tools/verify.mjs build/notes.html --seed '{"notes":[{"id":1,"title":"Hi","b
 The CI workflow ([`.github/workflows/pages.yml`](.github/workflows/pages.yml)) runs this over all six
 apps and refuses to deploy if any fails to boot.
 
+## Optional backend — the Sudoku history server
+
+The Sudoku app can sync solved games to a small **HTTP server also written in Elm**
+([`server/SudokuServer.elm`](server/SudokuServer.elm)), which keeps a per-player history and serves a
+live leaderboard. This is the one hybrid piece: the apps stay offline-first, and sync is best-effort
+on top.
+
+**Identity lives in the file.** When a Sudoku file is first opened it mints a UUID
+([`App.Env`](shared/App.elm)`.newId`, from `crypto.randomUUID`) and stores it in the document. Because
+it's persisted, your identity survives **Ctrl+S** — but a file you never save gets a fresh UUID each
+open (a new identity), exactly as intended.
+
+**Run it:**
+
+```bash
+ELM=../../elm.sh ./server/run.sh          # serves on http://localhost:8080
+# or: ../../elm.sh server server/SudokuServer.elm --port 8080
+```
+
+Open the Sudoku app, confirm the backend URL in its sync panel (defaults to `http://localhost:8080`),
+and solve a puzzle — the app times the solve and POSTs it. Visit `http://localhost:8080/` for the
+leaderboard: the 10 players with the newest solves, each with games passed and total solve time.
+
+**Endpoints** (all API responses carry permissive CORS headers, so a `file://` page — whose origin is
+`null` — can call them):
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/games` | record a solve `{playerId, puzzleIndex, elapsedMs, solvedAt}` |
+| `GET`  | `/games?playerId=…` | that player's summary + recent games (JSON) |
+| `GET`  | `/` | HTML leaderboard (auto-refreshes) |
+| `OPTIONS` | `*` | CORS preflight |
+
+State is in-memory (per server run). Restarting the server clears history — swap the `Dict` for a
+persisted store (e.g. the compiler's `Db` library via `--db`) if you want durability.
+
+**Compiler features this uses.** Building this required two additions to the elm-lang compiler, both
+in the parent repo:
+
+- `Server.Response` gained a `headers` field plus `withHeaders` / `cors` helpers
+  (`src/main/elm/lib/Server.elm` + `ServerRunner.java`) — needed to emit CORS headers.
+- A latent bug was fixed in the JS runtime: `Json.Decode.int` clamped decoded integers to 32 bits
+  (`j|0`), corrupting epoch-millisecond timestamps; it now uses `Math.trunc`
+  (`src/main/resources/elm/js/dom.js`).
+
+> ⚠️ The deploy workflow builds the client apps from `tunguski/elm-lang@master`; the **client apps**
+> don't need these changes, but the **Sudoku↔server sync** does. Push those compiler changes to
+> `elm-lang` before relying on the hosted build for the backend feature.
+
+### Headless end-to-end test
+
+With a server running, [`tools/e2e.mjs`](tools/e2e.mjs) boots the built Sudoku app in jsdom, seeds a
+game one cell from solved, types the last digit, and asserts the backend recorded the solve with a
+sane elapsed time:
+
+```bash
+ELM=../../elm.sh PORT=8097 ./server/run.sh &      # start a server
+node tools/e2e.mjs build/sudoku.html http://localhost:8097
+```
+
 ## Layout
 
 ```
@@ -92,10 +152,13 @@ src/*.css                 per-app styles (theme-aware, on top of assets/app.css)
 sheet/SheetApp.elm        the spreadsheet, driving SheetDoc.config
 sheet/elm.json            the spreadsheet's own project…
 sheet/elm.vendored.json   …with elm-spreadsheet + elm-workspace as git source deps
+server/SudokuServer.elm   the optional per-player history backend (an Elm HTTP server)
+server/run.sh             starts the backend
 assets/app.css            the shared design system (light/dark)
-assets/harness.js         the load / mirror / Ctrl+S-save JS harness
+assets/harness.js         the load / mirror / Ctrl+S-save JS harness (+ UUID / now in the envelope)
 assets/showcase.html      the gallery template ( <!--CARDS--> is filled from the registry )
 tools/inject.pl           post-processor: inlines CSS + harness, adds the data block + PWA manifest
+tools/verify.mjs          headless boot / round-trip / e2e test harnesses (jsdom)
 build.sh                  compiles each app and post-processes it into a single file
 ```
 

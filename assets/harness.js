@@ -59,6 +59,17 @@
     return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
   }
 
+  function freshUuid() {
+    try {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    } catch (e) {}
+    // Fallback v4-ish id when crypto.randomUUID is unavailable.
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+      var r = (Math.random() * 16) | 0;
+      return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+    });
+  }
+
   function sendLoad() {
     if (!app || !app.ports || !app.ports.load) return;
     var savedJson = readEmbedded();
@@ -71,7 +82,12 @@
         savedValue = null;
       }
     }
-    var envelope = JSON.stringify({ today: todayIso(), saved: savedValue });
+    var envelope = JSON.stringify({
+      today: todayIso(),
+      now: Date.now(),
+      newId: freshUuid(),
+      saved: savedValue,
+    });
     app.ports.load.send(envelope);
   }
 

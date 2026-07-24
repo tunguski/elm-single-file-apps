@@ -181,3 +181,40 @@
     width: min(78vmin, 540px);
   }
 }
+
+/* backend sync panel */
+.sk-sync {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--surface);
+}
+.sk-sync-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.sk-sync-status {
+  font-size: 13px;
+  min-height: 1.2em;
+}
+.sk-sync-url {
+  width: 100%;
+  font-size: 12.5px;
+  font-family: var(--mono);
+}
+.sk-sync-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sk-sync-ok {
+  color: var(--ok);
+}
+.sk-sync-fail {
+  color: var(--danger);
+}
