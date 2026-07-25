@@ -66,7 +66,7 @@ type Sync
 
 defaultServerUrl : String
 defaultServerUrl =
-    "http://localhost:8080"
+    "https://sudoku.matsuo.pl"
 
 
 init : Env -> ( Model, Cmd Msg )

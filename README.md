@@ -119,6 +119,26 @@ leaderboard: the 10 players with the newest solves, each with games passed and t
 State is in-memory (per server run). Restarting the server clears history — swap the `Dict` for a
 persisted store (e.g. the compiler's `Db` library via `--db`) if you want durability.
 
+**Local run** defaults to `http://localhost:8080`; the deployed client defaults to
+`https://sudoku.matsuo.pl` (change it in the app's sync panel to point elsewhere).
+
+### Deployment (`https://sudoku.matsuo.pl`)
+
+The backend deploys as a container onto the same VPS as the other `*.matsuo.pl` apps (an
+`nginx-proxy` + `acme-companion` setup: a container just declares `VIRTUAL_HOST` and gets routed with
+an auto-issued TLS cert). Two moving parts:
+
+1. **This repo** builds the image. [`.github/workflows/deploy-server.yml`](.github/workflows/deploy-server.yml)
+   builds `elm.jar`, runs `elm bundle server server/SudokuServer.elm --port 8080` to produce a
+   standalone `sudoku.jar`, and pushes `ghcr.io/tunguski/elm-single-file-apps/sudoku-server:latest`
+   (via [`server/Dockerfile`](server/Dockerfile), a JRE + that jar).
+2. **The `projects-aggregator` repo** runs it: a `sudoku` service in `containers/matsuo/docker-compose.yml`
+   pulls that image with `VIRTUAL_HOST=sudoku.matsuo.pl` / `LETSENCRYPT_HOST=sudoku.matsuo.pl`.
+
+**One-time setup:** point DNS `sudoku.matsuo.pl A → <vps-ip>`, ensure the GHCR image is public (or the
+VPS is logged in to GHCR), then `podman compose up -d sudoku` (or the VPS's usual pull/redeploy) in
+`containers/matsuo/`. nginx-proxy then routes it and acme-companion issues the cert on first request.
+
 **Compiler features this uses.** Building this required two additions to the elm-lang compiler, both
 in the parent repo:
 

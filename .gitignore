@@ -1,4 +1,5 @@
 build/
+server/*.jar
 git-deps/
 elm.vendored.local.json
 elm-stuff/
