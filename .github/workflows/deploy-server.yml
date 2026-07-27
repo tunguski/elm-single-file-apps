@@ -92,26 +92,25 @@ jobs:
       - name: Check out (for the compose file)
         uses: actions/checkout@v4
 
-      - name: Copy the compose file to the VPS
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: vps-7d690b64.vps.ovh.net
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          source: server/docker-compose.yml
-          target: elm-single-file-apps
-          strip_components: 1 # drop the leading "server/" → ~/elm-single-file-apps/docker-compose.yml
+      - name: Encode the compose file for transport
+        # Carried into the remote script via ssh-action's `envs` and decoded there — this keeps the
+        # deploy to the SINGLE appleboy/ssh-action the working projects-aggregator deploy uses (same
+        # host + VPS_USER/VPS_SSH_KEY secrets), with no second action to authenticate.
+        run: echo "COMPOSE_B64=$(base64 -w0 server/docker-compose.yml)" >> "$GITHUB_ENV"
 
-      - name: Pull the image and (re)deploy
+      - name: Deploy to VPS
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: vps-7d690b64.vps.ovh.net
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          envs: COMPOSE_B64
           script: |
+            set -e
             echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-            # Free the container name in case an earlier deploy (e.g. via projects-aggregator) still
-            # owns a container called `sudoku`; harmless on the first run.
+            mkdir -p ~/elm-single-file-apps
+            echo "$COMPOSE_B64" | base64 -d > ~/elm-single-file-apps/docker-compose.yml
+            # Free the container name in case an earlier deploy still owns a container called `sudoku`.
             podman rm -f sudoku 2>/dev/null || true
             cd ~/elm-single-file-apps
             podman pull ghcr.io/tunguski/elm-single-file-apps/sudoku-server:latest
