@@ -10,6 +10,10 @@ FROM eclipse-temurin:25-jre
 WORKDIR /app
 COPY sudoku.jar /app/sudoku.jar
 
+# The H2 database file lives here; in production the `sudoku-db` volume is mounted over it so the
+# games table persists across redeploys. Set DB_URL=jdbc:h2:file:/app/db/sudoku (see docker-compose).
+RUN mkdir -p /app/db
+
 # The port is baked into the jar (--port 8080); nginx-proxy routes VIRTUAL_HOST here on VIRTUAL_PORT.
 EXPOSE 8080
 

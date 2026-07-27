@@ -4,8 +4,9 @@
 # EXTERNAL `podman` network that the VPS's nginx-proxy + acme-companion watch, so simply declaring
 # VIRTUAL_HOST / LETSENCRYPT_HOST is enough for routing and automatic TLS — no aggregator wiring.
 #
-# Deployed by .github/workflows/deploy-server.yml (scp this file to the VPS, then `podman compose
-# up -d`). History is in-memory, so a redeploy/restart resets the leaderboard.
+# Deployed by .github/workflows/deploy-server.yml (carried to the VPS via the ssh-action and brought
+# up with `podman compose up -d`). History persists in an H2 file on the `sudoku-db` volume, so it
+# survives redeploys/restarts.
 services:
   sudoku:
     image: ghcr.io/tunguski/elm-single-file-apps/sudoku-server:latest
@@ -16,8 +17,16 @@ services:
       - VIRTUAL_PORT=8080
       - LETSENCRYPT_HOST=sudoku.matsuo.pl
       - LETSENCRYPT_EMAIL=admin@matsuo.pl
+      # The bundled server reads DB_URL (any JDBC URL; H2 ships in the image) and stores the games
+      # table in a file on the mounted volume below — mirrors the matsuo Java services' DB_URL+volume.
+      - DB_URL=jdbc:h2:file:/app/db/sudoku
+    volumes:
+      - sudoku-db:/app/db
     networks:
       - podman
+
+volumes:
+  sudoku-db:
 
 networks:
   podman:

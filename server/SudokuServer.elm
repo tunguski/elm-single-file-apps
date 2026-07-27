@@ -1,101 +1,80 @@
-module SudokuServer exposing (main)
+module SudokuServer exposing (handle)
 
-{-| **Sudoku backend** — a stateful HTTP server that keeps a per-user history of solved games and
-serves a live leaderboard. Run it with the elm-lang compiler:
+{-| **Sudoku backend** — an HTTP server that keeps a per-player history of solved games in an H2
+database and serves a live leaderboard. Run it with the elm-lang compiler:
 
-    ../../elm.sh server projects/elm-single-file-apps/server/SudokuServer.elm --port 8080
+    DB_URL="jdbc:h2:file:./sudoku" \
+      ../../elm.sh server projects/elm-single-file-apps/server/SudokuServer.elm --db "$DB_URL" --port 8080
+
+(or bundle it — the bundled jar reads the same `DB_URL` environment variable; see server/Dockerfile).
 
 Users are identified by a UUID the Sudoku app mints when its file is first opened and stores in the
-file itself (Ctrl+S). Each solve is POSTed here; the server accumulates games, total solve time and
-the last-update time per user, all in memory.
+file itself (Ctrl+S). Each solve is POSTed here and appended to the `games` table, so history now
+survives restarts and redeploys.
 
-Endpoints:
+Endpoints (all API responses carry permissive CORS headers via `Server.cors`, so a `file://` Sudoku
+page — origin `null` — may call them):
 
-  - `POST /games`  body `{playerId, puzzleIndex, elapsedMs, solvedAt}` → records a solved game,
-    returns that user's updated summary as JSON.
-  - `GET  /games?playerId=…` → that user's summary + recent games as JSON.
-  - `GET  /`  → an HTML leaderboard: the 10 users with the newest updates, each with the number of
+  - `POST /games`  body `{playerId, puzzleIndex, elapsedMs, solvedAt}` → records a solve, returns that
+    player's updated summary as JSON.
+  - `GET  /games?playerId=…` → that player's summary + recent games as JSON.
+  - `GET  /`  → an HTML leaderboard: the 10 players with the newest solves, each with the number of
     games passed and the total time spent solving them.
-  - `OPTIONS *` → CORS preflight (so a `file://` Sudoku page, whose origin is `null`, may call it).
+  - `GET  /health` → `ok` (no database access).
+  - `OPTIONS *` → CORS preflight.
 
-All API responses carry permissive CORS headers via `Server.cors`.
+The handler is `Request -> Db Response` — a pure description of the SQL to run; the runner executes it
+against the JDBC connection and never exposes it to this code. Parameters are bound (`?`), never
+spliced, so player input can't be interpreted as SQL.
 
 -}
 
-import Dict exposing (Dict)
+import Db exposing (Db, RowDecoder, andMap, andThen, execute, int, intColumn, map, map2, queryWith, row, succeed, textColumn)
 import Json.Decode as D
 import Json.Encode as E
 import Server exposing (Request, Response, cors, html, json, notFound, param, response, segments)
 
 
 
--- MODEL
+-- ROUTING
 
 
-type alias Game =
-    { puzzleIndex : Int
-    , elapsedMs : Int
-    , solvedAt : Int -- client wall-clock epoch ms (the server handler is pure — no clock of its own)
-    }
+handle : Request -> Db Response
+handle req =
+    case ( req.method, segments req ) of
+        ( "OPTIONS", _ ) ->
+            succeed (cors (response 204 "text/plain" ""))
+
+        ( "GET", [ "health" ] ) ->
+            succeed (cors (response 200 "text/plain" "ok"))
+
+        _ ->
+            -- Every data route needs the table; creating it here (idempotent, cheap) means the server
+            -- needs no separate migration step.
+            execute createTableSql []
+                |> andThen (\_ -> route req)
 
 
-type alias User =
-    { games : List Game -- newest first, capped
-    , count : Int
-    , totalMs : Int
-    , lastUpdate : Int
-    }
+route : Request -> Db Response
+route req =
+    case ( req.method, segments req ) of
+        ( "POST", [ "games" ] ) ->
+            postGame req
+
+        ( "GET", [ "games" ] ) ->
+            getGames req
+
+        ( "GET", [] ) ->
+            leaderboard
+
+        _ ->
+            succeed (cors notFound)
 
 
-type alias Model =
-    Dict String User
-
-
-emptyUser : User
-emptyUser =
-    { games = [], count = 0, totalMs = 0, lastUpdate = 0 }
-
-
-addGame : Game -> User -> User
-addGame g u =
-    { games = List.take 50 (g :: u.games)
-    , count = u.count + 1
-    , totalMs = u.totalMs + g.elapsedMs
-    , lastUpdate = max u.lastUpdate g.solvedAt
-    }
-
-
-main : Server.Program Model
-main =
-    Server.program
-        { init = Dict.empty
-        , onRequest = onRequest
-        , onTick = identity
-        , tickMillis = 0
-        }
-
-
-onRequest : Request -> Model -> ( Model, Response )
-onRequest req model =
-    if req.method == "OPTIONS" then
-        ( model, cors (response 204 "text/plain" "") )
-
-    else
-        case ( req.method, segments req ) of
-            ( "POST", [ "games" ] ) ->
-                postGame req model
-
-            ( "GET", [ "games" ] ) ->
-                ( model, cors (getGames req model) )
-
-            ( "GET", [] ) ->
-                ( model, cors (html (leaderboardPage model)) )
-
-            ( "GET", [ "health" ] ) ->
-                ( model, cors (Server.text "ok") )
-
-            _ ->
-                ( model, cors notFound )
+createTableSql : String
+createTableSql =
+    "CREATE TABLE IF NOT EXISTS games "
+        ++ "(player VARCHAR NOT NULL, puzzle INT NOT NULL, elapsed_ms BIGINT NOT NULL, solved_at BIGINT NOT NULL)"
 
 
 
@@ -103,69 +82,119 @@ onRequest req model =
 
 
 type alias Incoming =
-    { playerId : String, game : Game }
+    { playerId : String
+    , puzzleIndex : Int
+    , elapsedMs : Int
+    , solvedAt : Int
+    }
 
 
 incomingDecoder : D.Decoder Incoming
 incomingDecoder =
-    D.map4
-        (\pid pi el sa ->
-            { playerId = pid, game = { puzzleIndex = pi, elapsedMs = el, solvedAt = sa } }
-        )
+    D.map4 Incoming
         (D.field "playerId" D.string)
         (D.field "puzzleIndex" D.int)
         (D.field "elapsedMs" D.int)
         (D.field "solvedAt" D.int)
 
 
-postGame : Request -> Model -> ( Model, Response )
-postGame req model =
+postGame : Request -> Db Response
+postGame req =
     case D.decodeString incomingDecoder req.body of
-        Ok { playerId, game } ->
-            if String.trim playerId == "" then
-                ( model, cors (errorJson 400 "missing playerId") )
+        Ok g ->
+            if String.trim g.playerId == "" then
+                succeed (cors (errorJson 400 "missing playerId"))
 
             else
-                let
-                    updated =
-                        addGame game (Maybe.withDefault emptyUser (Dict.get playerId model))
-                in
-                ( Dict.insert playerId updated model
-                , cors (json (E.encode 0 (encodeUser playerId updated)))
-                )
+                execute
+                    "INSERT INTO games (player, puzzle, elapsed_ms, solved_at) VALUES (?, ?, ?, ?)"
+                    [ Db.text g.playerId, int g.puzzleIndex, int g.elapsedMs, int g.solvedAt ]
+                    |> andThen (\_ -> summaryQuery g.playerId)
+                    |> map (\s -> cors (json (encodeUser g.playerId s [])))
 
         Err _ ->
-            ( model, cors (errorJson 400 "malformed JSON body") )
-
-
-errorJson : Int -> String -> Response
-errorJson status message =
-    response status "application/json" (E.encode 0 (E.object [ ( "error", E.string message ) ]))
+            succeed (cors (errorJson 400 "malformed JSON body"))
 
 
 
 -- GET /games?playerId=…
 
 
-getGames : Request -> Model -> Response
-getGames req model =
+getGames : Request -> Db Response
+getGames req =
     case param "playerId" req of
         Just pid ->
-            json (E.encode 0 (encodeUser pid (Maybe.withDefault emptyUser (Dict.get pid model))))
+            map2 (\s games -> cors (json (encodeUser pid s games)))
+                (summaryQuery pid)
+                (gamesQuery pid)
 
         Nothing ->
-            errorJson 400 "missing playerId query parameter"
+            succeed (cors (errorJson 400 "missing playerId query parameter"))
 
 
-encodeUser : String -> User -> E.Value
-encodeUser pid u =
-    E.object
-        [ ( "playerId", E.string pid )
-        , ( "count", E.int u.count )
-        , ( "totalMs", E.int u.totalMs )
-        , ( "lastUpdate", E.int u.lastUpdate )
-        , ( "games", E.list encodeGame u.games )
-        ]
+
+-- QUERIES
+
+
+type alias Summary =
+    { count : Int, totalMs : Int, lastUpdate : Int }
+
+
+summaryRow : RowDecoder Summary
+summaryRow =
+    row Summary
+        |> andMap intColumn
+        |> andMap intColumn
+        |> andMap intColumn
+
+
+summaryQuery : String -> Db Summary
+summaryQuery pid =
+    queryWith
+        -- CAST the SUM to BIGINT: H2's SUM(BIGINT) yields a DECIMAL, which the runner decodes as a
+        -- real, not an int — the cast keeps the column an integer so `intColumn` matches it.
+        "SELECT COUNT(*), CAST(COALESCE(SUM(elapsed_ms), 0) AS BIGINT), COALESCE(MAX(solved_at), 0) FROM games WHERE player = ?"
+        [ Db.text pid ]
+        summaryRow
+        |> map (\res -> Maybe.withDefault (Summary 0 0 0) (List.head (Result.withDefault [] res)))
+
+
+type alias Game =
+    { puzzleIndex : Int, elapsedMs : Int, solvedAt : Int }
+
+
+gameRow : RowDecoder Game
+gameRow =
+    row Game
+        |> andMap intColumn
+        |> andMap intColumn
+        |> andMap intColumn
+
+
+gamesQuery : String -> Db (List Game)
+gamesQuery pid =
+    queryWith
+        "SELECT puzzle, elapsed_ms, solved_at FROM games WHERE player = ? ORDER BY solved_at DESC LIMIT 50"
+        [ Db.text pid ]
+        gameRow
+        |> map (Result.withDefault [])
+
+
+
+-- JSON
+
+
+encodeUser : String -> Summary -> List Game -> String
+encodeUser pid s games =
+    E.encode 0
+        (E.object
+            [ ( "playerId", E.string pid )
+            , ( "count", E.int s.count )
+            , ( "totalMs", E.int s.totalMs )
+            , ( "lastUpdate", E.int s.lastUpdate )
+            , ( "games", E.list encodeGame games )
+            ]
+        )
 
 
 encodeGame : Game -> E.Value
@@ -177,27 +206,63 @@ encodeGame g =
         ]
 
 
+errorJson : Int -> String -> Response
+errorJson status message =
+    response status "application/json" (E.encode 0 (E.object [ ( "error", E.string message ) ]))
+
+
 
 -- GET / — the HTML leaderboard
 
 
-leaderboardPage : Model -> String
-leaderboardPage model =
+type alias Rank =
+    { player : String, count : Int, totalMs : Int, lastUpdate : Int }
+
+
+rankRow : RowDecoder Rank
+rankRow =
+    row Rank
+        |> andMap textColumn
+        |> andMap intColumn
+        |> andMap intColumn
+        |> andMap intColumn
+
+
+leaderboard : Db Response
+leaderboard =
+    map2 (\( players, games ) ranks -> cors (html (leaderboardPage players games ranks)))
+        totalsQuery
+        ranksQuery
+
+
+totalsQuery : Db ( Int, Int )
+totalsQuery =
+    queryWith "SELECT COUNT(DISTINCT player), COUNT(*) FROM games"
+        []
+        (row Tuple.pair |> andMap intColumn |> andMap intColumn)
+        |> map (\res -> Maybe.withDefault ( 0, 0 ) (List.head (Result.withDefault [] res)))
+
+
+ranksQuery : Db (List Rank)
+ranksQuery =
+    queryWith
+        ("SELECT player, COUNT(*), CAST(COALESCE(SUM(elapsed_ms), 0) AS BIGINT), COALESCE(MAX(solved_at), 0) "
+            ++ "FROM games GROUP BY player ORDER BY MAX(solved_at) DESC LIMIT 10"
+        )
+        []
+        rankRow
+        |> map (Result.withDefault [])
+
+
+leaderboardPage : Int -> Int -> List Rank -> String
+leaderboardPage players totalGames ranks =
     let
-        ranked =
-            Dict.toList model
-                |> List.sortBy (\( _, u ) -> negate u.lastUpdate)
-                |> List.take 10
-
-        totalGames =
-            List.sum (List.map (\( _, u ) -> u.count) (Dict.toList model))
-
         rowsHtml =
-            if List.isEmpty ranked then
+            if List.isEmpty ranks then
                 "<tr><td colspan=\"5\" class=\"empty\">No games recorded yet — solve a puzzle in the Sudoku app.</td></tr>"
 
             else
-                String.concat (List.indexedMap row ranked)
+                String.concat (List.indexedMap rankHtml ranks)
     in
     String.join "\n"
         [ "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -208,7 +273,7 @@ leaderboardPage model =
         , "<main class=\"wrap\">"
         , "<header><h1>🔢 Sudoku leaderboard</h1>"
         , "<p class=\"sub\">The 10 players with the most recent solves · "
-            ++ String.fromInt (Dict.size model)
+            ++ String.fromInt players
             ++ " players · "
             ++ String.fromInt totalGames
             ++ " games total · refreshes every 5s</p></header>"
@@ -219,30 +284,25 @@ leaderboardPage model =
         ]
 
 
-row : Int -> ( String, User ) -> String
-row i ( pid, u ) =
+rankHtml : Int -> Rank -> String
+rankHtml i r =
     String.concat
         [ "<tr><td class=\"rank\">"
         , String.fromInt (i + 1)
         , "</td><td><code>"
-        , shortId pid
+        , String.left 8 r.player
         , "</code></td><td class=\"num\">"
-        , String.fromInt u.count
+        , String.fromInt r.count
         , "</td><td class=\"num\">"
-        , fmtDuration u.totalMs
+        , fmtDuration r.totalMs
         , "</td><td>"
-        , fmtUtc u.lastUpdate
+        , fmtUtc r.lastUpdate
         , "</td></tr>"
         ]
 
 
-shortId : String -> String
-shortId pid =
-    String.left 8 pid
 
-
-
--- FORMATTING (pure — the handler has no clock, so timestamps come from the client)
+-- FORMATTING (pure)
 
 
 fmtDuration : Int -> String
@@ -299,7 +359,13 @@ fmtUtc ms =
                 days + 719468
 
             era =
-                (if z >= 0 then z else z - 146096) // 146097
+                (if z >= 0 then
+                    z
+
+                 else
+                    z - 146096
+                )
+                    // 146097
 
             doe =
                 z - era * 146097
@@ -320,10 +386,22 @@ fmtUtc ms =
                 doy - (153 * mp + 2) // 5 + 1
 
             month =
-                mp + (if mp < 10 then 3 else -9)
+                mp
+                    + (if mp < 10 then
+                        3
+
+                       else
+                        -9
+                      )
 
             year =
-                y + (if month <= 2 then 1 else 0)
+                y
+                    + (if month <= 2 then
+                        1
+
+                       else
+                        0
+                      )
 
             pad n =
                 String.padLeft 2 '0' (String.fromInt n)

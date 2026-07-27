@@ -114,10 +114,22 @@ leaderboard: the 10 players with the newest solves, each with games passed and t
 | `POST` | `/games` | record a solve `{playerId, puzzleIndex, elapsedMs, solvedAt}` |
 | `GET`  | `/games?playerId=…` | that player's summary + recent games (JSON) |
 | `GET`  | `/` | HTML leaderboard (auto-refreshes) |
+| `GET`  | `/health` | `ok` (no database access) |
 | `OPTIONS` | `*` | CORS preflight |
 
-State is in-memory (per server run). Restarting the server clears history — swap the `Dict` for a
-persisted store (e.g. the compiler's `Db` library via `--db`) if you want durability.
+**Storage — H2 via the `Db` library.** The handler is `handle : Request -> Db Response`: a pure
+description of typed, parameterized SQL (no string-splicing → injection-safe) that the runner executes
+against a JDBC connection. It reads/writes a single `games` table, so history **persists across
+restarts and redeploys** (an H2 file on the mounted volume). Point it at a database with the `DB_URL`
+environment variable (any JDBC URL; H2 ships in the build):
+
+```bash
+DB_URL="jdbc:h2:file:./sudoku" ../../elm.sh server server/SudokuServer.elm --db "$DB_URL" --port 8080
+```
+
+The **bundled** jar reads the same `DB_URL` env var (no `--db` flag needed) — that's a small elm-lang
+addition: `Standalone` now passes `DB_URL` into the server runner and bundles `Db.elm` alongside
+`Server.elm`.
 
 **Local run** defaults to `http://localhost:8080`; the deployed client defaults to
 `https://sudoku.matsuo.pl` (change it in the app's sync panel to point elsewhere).
