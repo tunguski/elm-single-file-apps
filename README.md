@@ -124,20 +124,30 @@ persisted store (e.g. the compiler's `Db` library via `--db`) if you want durabi
 
 ### Deployment (`https://sudoku.matsuo.pl`)
 
-The backend deploys as a container onto the same VPS as the other `*.matsuo.pl` apps (an
-`nginx-proxy` + `acme-companion` setup: a container just declares `VIRTUAL_HOST` and gets routed with
-an auto-issued TLS cert). Two moving parts:
+The **entire deployment lives in this repo** — image build *and* the compose file that runs it. The
+backend runs as its own compose project on the shared VPS, joining the external `podman` network that
+`nginx-proxy` + `acme-companion` watch; declaring `VIRTUAL_HOST` is enough for routing + auto-TLS.
 
-1. **This repo** builds the image. [`.github/workflows/deploy-server.yml`](.github/workflows/deploy-server.yml)
-   builds `elm.jar`, runs `elm bundle server server/SudokuServer.elm --port 8080` to produce a
-   standalone `sudoku.jar`, and pushes `ghcr.io/tunguski/elm-single-file-apps/sudoku-server:latest`
-   (via [`server/Dockerfile`](server/Dockerfile), a JRE + that jar).
-2. **The `projects-aggregator` repo** runs it: a `sudoku` service in `containers/matsuo/docker-compose.yml`
-   pulls that image with `VIRTUAL_HOST=sudoku.matsuo.pl` / `LETSENCRYPT_HOST=sudoku.matsuo.pl`.
+[`.github/workflows/deploy-server.yml`](.github/workflows/deploy-server.yml), on any push touching
+`server/**`:
 
-**One-time setup:** point DNS `sudoku.matsuo.pl A → <vps-ip>`, ensure the GHCR image is public (or the
-VPS is logged in to GHCR), then `podman compose up -d sudoku` (or the VPS's usual pull/redeploy) in
-`containers/matsuo/`. nginx-proxy then routes it and acme-companion issues the cert on first request.
+1. Builds `elm.jar`, runs `elm bundle server server/SudokuServer.elm --port 8080` → a standalone
+   `sudoku.jar`, and pushes `ghcr.io/tunguski/elm-single-file-apps/sudoku-server:latest` (via
+   [`server/Dockerfile`](server/Dockerfile), a JRE + that jar).
+2. `scp`s [`server/docker-compose.yml`](server/docker-compose.yml) to the VPS and runs
+   `podman pull` + `podman compose up -d` there — so a code change to `SudokuServer.elm` redeploys
+   itself.
+
+**One-time setup:**
+
+- Add repo secrets **`VPS_USER`** and **`VPS_SSH_KEY`** (same values the other VPS deploys use; or make
+  them org-level).
+- DNS: `sudoku.matsuo.pl A → <vps-ip>`.
+- After the first publish, make the GHCR `sudoku-server` package **public** (or keep the VPS logged in
+  to GHCR) so the container can be pulled on restarts.
+
+nginx-proxy then routes `sudoku.matsuo.pl` to the container and acme-companion issues the cert on the
+first request. (Nothing in `projects-aggregator` is involved.)
 
 **Compiler features this uses.** Building this required two additions to the elm-lang compiler, both
 in the parent repo:

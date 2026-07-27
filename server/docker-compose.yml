@@ -1,0 +1,25 @@
+# docker-compose.yml — deploys the Sudoku backend as https://sudoku.matsuo.pl on the shared VPS.
+#
+# This runs as its OWN compose project, independent of projects-aggregator. It joins the same
+# EXTERNAL `podman` network that the VPS's nginx-proxy + acme-companion watch, so simply declaring
+# VIRTUAL_HOST / LETSENCRYPT_HOST is enough for routing and automatic TLS — no aggregator wiring.
+#
+# Deployed by .github/workflows/deploy-server.yml (scp this file to the VPS, then `podman compose
+# up -d`). History is in-memory, so a redeploy/restart resets the leaderboard.
+services:
+  sudoku:
+    image: ghcr.io/tunguski/elm-single-file-apps/sudoku-server:latest
+    container_name: sudoku
+    restart: always
+    environment:
+      - VIRTUAL_HOST=sudoku.matsuo.pl
+      - VIRTUAL_PORT=8080
+      - LETSENCRYPT_HOST=sudoku.matsuo.pl
+      - LETSENCRYPT_EMAIL=admin@matsuo.pl
+    networks:
+      - podman
+
+networks:
+  podman:
+    name: podman
+    external: true

@@ -79,18 +79,30 @@ jobs:
           cache-from: type=gha,scope=sudoku-server
           cache-to: type=gha,scope=sudoku-server,mode=max
 
-  # Pull the freshly-published image on the VPS and recreate just the `sudoku` service — the same
-  # SSH/podman pattern the projects-aggregator maven.yml deploy uses, scoped to this one service so
-  # the other *.matsuo.pl containers are left untouched. Needs VPS_USER / VPS_SSH_KEY secrets on
-  # THIS repo (the same values the projects-aggregator repo uses). The `sudoku` service must already
-  # exist in ~/containers/matsuo/docker-compose.yml on the VPS — that arrives via the aggregator's
-  # publish-containers workflow, so push projects-aggregator once before the first run here.
+  # Deploy the Sudoku backend as its OWN compose project on the VPS — the whole deployment
+  # (server/docker-compose.yml) lives in this repo, independent of projects-aggregator. It joins the
+  # shared external `podman` network, so nginx-proxy + acme-companion route sudoku.matsuo.pl and
+  # issue its cert automatically. Needs VPS_USER / VPS_SSH_KEY secrets on THIS repo (same values the
+  # projects-aggregator repo uses).
   deploy:
     needs: build-and-push
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Redeploy the sudoku service on the VPS
+      - name: Check out (for the compose file)
+        uses: actions/checkout@v4
+
+      - name: Copy the compose file to the VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: vps-7d690b64.vps.ovh.net
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: server/docker-compose.yml
+          target: elm-single-file-apps
+          strip_components: 1 # drop the leading "server/" → ~/elm-single-file-apps/docker-compose.yml
+
+      - name: Pull the image and (re)deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: vps-7d690b64.vps.ovh.net
@@ -98,6 +110,9 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
+            # Free the container name in case an earlier deploy (e.g. via projects-aggregator) still
+            # owns a container called `sudoku`; harmless on the first run.
+            podman rm -f sudoku 2>/dev/null || true
+            cd ~/elm-single-file-apps
             podman pull ghcr.io/tunguski/elm-single-file-apps/sudoku-server:latest
-            cd ~/containers/matsuo
-            podman compose up -d --force-recreate sudoku
+            podman compose up -d --force-recreate
