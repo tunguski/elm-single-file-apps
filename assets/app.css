@@ -336,3 +336,27 @@ select:focus {
   color: var(--ok);
   border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
 }
+
+/* ---- Sync account bar (client half of the Backend platform) ---- */
+.sync-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.app--under-bar { flex: 1 1 auto; min-height: 0; }
+.sync-toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+.sync-url { width: 200px; max-width: 40vw; font-family: var(--mono); font-size: 12px; padding: 4px 8px; }
+.sync-id { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+.sync-user { font-weight: 650; color: var(--accent); }
+.sync-anon { color: var(--muted); }
+.sync-form, .share-form { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sync-in { font-size: 13px; padding: 5px 8px; }
+.sync-status { color: var(--danger); font-size: 12.5px; }
+.badge { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; margin-left: 6px; vertical-align: middle; }
+.badge--shared { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }

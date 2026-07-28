@@ -1,20 +1,25 @@
 module Notes exposing (main)
 
-{-| **Notes** — a two-pane note keeper. Titles and bodies on the left, a plain-text editor on the
-right. All notes live in the file itself; Ctrl+S writes them back. See [`App`](App).
+{-| **Notes** — a two-pane note keeper. Notes live in the file (Ctrl+S), and can optionally sync to a
+[`Backend`](Backend) server via [`Sync`](Sync): turn on **Cloud**, and each note becomes a per-user
+document you can share with other users by their login. Shared notes (owned by someone else) show a
+badge and are read-only. See [`App`](App).
 -}
 
 import App exposing (Env)
 import Html exposing (Html, button, div, header, input, li, span, text, textarea, ul)
-import Html.Attributes exposing (attribute, class, classList, placeholder, value)
+import Html.Attributes exposing (class, classList, disabled, placeholder, value)
 import Html.Events exposing (onClick, onInput)
+import Http
 import Json.Decode as D
 import Json.Encode as E
+import Set
+import Sync
 
 
 main : Program () (App.State Model) (App.Event Msg)
 main =
-    App.program
+    App.programEffect
         { init = init
         , update = update
         , view = view
@@ -24,66 +29,93 @@ main =
         }
 
 
+config : Sync.Config
+config =
+    { defaultBase = "https://notes.matsuo.pl" }
 
--- MODEL ----------------------------------------------------------------------
+
+
+-- MODEL
 
 
 type alias Note =
-    { id : Int
+    { id : String
     , title : String
     , body : String
+    , owner : String -- backend owner uuid; "" for a local-only note
     }
 
 
 type alias Model =
     { notes : List Note
-    , selected : Maybe Int
-    , nextId : Int
+    , selected : Maybe String
+    , seq : Int
     , query : String
+    , sync : Sync.Model
+    , shareFor : Maybe String
+    , shareLogin : String
     }
 
 
-init : Env -> Model
-init _ =
-    { notes = []
-    , selected = Nothing
-    , nextId = 1
-    , query = ""
-    }
+init : Env -> ( Model, Cmd Msg )
+init env =
+    ( { notes = []
+      , selected = Nothing
+      , seq = 1
+      , query = ""
+      , sync = Sync.init config env.newId
+      , shareFor = Nothing
+      , shareLogin = ""
+      }
+    , Cmd.none
+    )
+
+
+mine : Model -> Note -> Bool
+mine model note =
+    note.owner == "" || note.owner == model.sync.uid
 
 
 
--- UPDATE ---------------------------------------------------------------------
+-- UPDATE
 
 
 type Msg
     = New
-    | Select Int
-    | Delete Int
+    | Select String
+    | Delete String
     | SetTitle String
     | SetBody String
     | SetQuery String
+    | SyncMsg Sync.Msg
+    | GotDocs (Result Http.Error (List Sync.Doc))
+    | Pushed (Result Http.Error ())
+    | OpenShare (Maybe String)
+    | SetShareLogin String
+    | DoShare String
+    | Shared (Result Http.Error ())
 
 
-update : Msg -> Model -> Model
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         New ->
             let
+                id =
+                    model.sync.uid ++ "-" ++ String.fromInt model.seq
+
                 note =
-                    { id = model.nextId, title = "Untitled", body = "" }
+                    { id = id, title = "Untitled", body = "", owner = model.sync.uid }
             in
-            { model
-                | notes = note :: model.notes
-                , selected = Just note.id
-                , nextId = model.nextId + 1
-            }
+            ( { model | notes = note :: model.notes, selected = Just id, seq = model.seq + 1 }
+            , pushIfCloud model note
+            )
 
         Select id ->
-            { model | selected = Just id }
+            ( { model | selected = Just id, shareFor = Nothing }, Cmd.none )
 
         Delete id ->
-            { model
+            ( { model
                 | notes = List.filter (\n -> n.id /= id) model.notes
                 , selected =
                     if model.selected == Just id then
@@ -91,38 +123,154 @@ update msg model =
 
                     else
                         model.selected
-            }
+              }
+            , removeIfCloud model id
+            )
 
         SetTitle t ->
-            { model | notes = mapSelected model (\n -> { n | title = t }) }
+            editSelected model (\n -> { n | title = t })
 
         SetBody b ->
-            { model | notes = mapSelected model (\n -> { n | body = b }) }
+            editSelected model (\n -> { n | body = b })
 
         SetQuery q ->
-            { model | query = q }
+            ( { model | query = q }, Cmd.none )
+
+        SyncMsg m ->
+            let
+                ( sync2, cmd, out ) =
+                    Sync.update m model.sync
+
+                model2 =
+                    { model | sync = sync2 }
+            in
+            case out of
+                Sync.Refresh ->
+                    ( model2, Cmd.batch [ Cmd.map SyncMsg cmd, Sync.pull sync2 GotDocs ] )
+
+                _ ->
+                    ( model2, Cmd.map SyncMsg cmd )
+
+        GotDocs (Ok docs) ->
+            ( mergeDocs docs model, Cmd.none )
+
+        GotDocs (Err _) ->
+            ( model, Cmd.none )
+
+        Pushed _ ->
+            ( model, Cmd.none )
+
+        OpenShare id ->
+            ( { model | shareFor = id, shareLogin = "" }, Cmd.none )
+
+        SetShareLogin s ->
+            ( { model | shareLogin = s }, Cmd.none )
+
+        DoShare id ->
+            ( { model | shareFor = Nothing }, Sync.share model.sync id model.shareLogin Shared )
+
+        Shared _ ->
+            ( model, Cmd.none )
 
 
-mapSelected : Model -> (Note -> Note) -> List Note
-mapSelected model f =
+editSelected : Model -> (Note -> Note) -> ( Model, Cmd Msg )
+editSelected model f =
     case model.selected of
         Nothing ->
-            model.notes
+            ( model, Cmd.none )
 
         Just id ->
-            List.map
-                (\n ->
-                    if n.id == id then
-                        f n
+            let
+                notes =
+                    List.map
+                        (\n ->
+                            if n.id == id then
+                                f n
+
+                            else
+                                n
+                        )
+                        model.notes
+
+                changed =
+                    List.filter (\n -> n.id == id) notes
+            in
+            ( { model | notes = notes }
+            , case changed of
+                n :: _ ->
+                    if mine model n then
+                        pushIfCloud model n
 
                     else
-                        n
-                )
-                model.notes
+                        Cmd.none
+
+                [] ->
+                    Cmd.none
+            )
+
+
+pushIfCloud : Model -> Note -> Cmd Msg
+pushIfCloud model note =
+    if Sync.cloudOn model.sync then
+        Sync.push model.sync (noteToDoc note) Pushed
+
+    else
+        Cmd.none
+
+
+removeIfCloud : Model -> String -> Cmd Msg
+removeIfCloud model id =
+    if Sync.cloudOn model.sync then
+        Sync.remove model.sync id Shared
+
+    else
+        Cmd.none
+
+
+noteToDoc : Note -> Sync.Doc
+noteToDoc note =
+    { id = note.id
+    , title = note.title
+    , visibility = "private"
+    , owner = note.owner
+    , body = E.object [ ( "title", E.string note.title ), ( "body", E.string note.body ) ]
+    }
+
+
+docToNote : Sync.Doc -> Maybe Note
+docToNote doc =
+    case D.decodeValue bodyDecoder doc.body of
+        Ok ( t, b ) ->
+            Just { id = doc.id, title = t, body = b, owner = doc.owner }
+
+        Err _ ->
+            Nothing
+
+
+bodyDecoder : D.Decoder ( String, String )
+bodyDecoder =
+    D.map2 Tuple.pair
+        (D.oneOf [ D.field "title" D.string, D.succeed "Untitled" ])
+        (D.oneOf [ D.field "body" D.string, D.succeed "" ])
+
+
+mergeDocs : List Sync.Doc -> Model -> Model
+mergeDocs docs model =
+    let
+        remote =
+            List.filterMap docToNote docs
+
+        remoteIds =
+            Set.fromList (List.map .id remote)
+
+        localOnly =
+            List.filter (\n -> not (Set.member n.id remoteIds)) model.notes
+    in
+    { model | notes = remote ++ localOnly }
 
 
 
--- VIEW -----------------------------------------------------------------------
+-- VIEW
 
 
 view : Model -> Html Msg
@@ -131,21 +279,18 @@ view model =
         visible =
             List.filter (matches model.query) model.notes
     in
-    div [ class "app app--split" ]
-        [ div [ class "pane pane--list" ]
-            [ header [ class "pane__head" ]
-                [ input
-                    [ class "search"
-                    , placeholder "Search notes…"
-                    , value model.query
-                    , onInput SetQuery
+    div [ class "app" ]
+        [ Html.map SyncMsg (Sync.view model.sync)
+        , div [ class "app--split app--under-bar" ]
+            [ div [ class "pane pane--list" ]
+                [ header [ class "pane__head" ]
+                    [ input [ class "search", placeholder "Search notes…", value model.query, onInput SetQuery ] []
+                    , button [ class "btn btn--primary", onClick New ] [ text "+ New" ]
                     ]
-                    []
-                , button [ class "btn btn--primary", onClick New ] [ text "+ New" ]
+                , ul [ class "list" ] (List.map (row model) visible)
                 ]
-            , ul [ class "list" ] (List.map (row model.selected) visible)
+            , div [ class "pane pane--main" ] [ editor model ]
             ]
-        , div [ class "pane pane--main" ] [ editor model ]
         ]
 
 
@@ -155,21 +300,23 @@ matches q note =
         needle =
             String.toLower (String.trim q)
     in
-    needle
-        == ""
-        || String.contains needle (String.toLower note.title)
-        || String.contains needle (String.toLower note.body)
+    needle == "" || String.contains needle (String.toLower note.title) || String.contains needle (String.toLower note.body)
 
 
-row : Maybe Int -> Note -> Html Msg
-row selected note =
+row : Model -> Note -> Html Msg
+row model note =
     li
-        [ class "list__item"
-        , classList [ ( "is-active", selected == Just note.id ) ]
+        [ classList [ ( "list__item", True ), ( "is-active", model.selected == Just note.id ) ]
         , onClick (Select note.id)
         ]
         [ span [ class "list__title" ]
-            [ text (nonEmpty note.title "Untitled") ]
+            [ text (nonEmpty note.title "Untitled")
+            , if mine model note then
+                text ""
+
+              else
+                span [ class "badge badge--shared" ] [ text "shared" ]
+            ]
         , span [ class "list__sub" ] [ text (preview note.body) ]
         ]
 
@@ -178,34 +325,42 @@ editor : Model -> Html Msg
 editor model =
     case selectedNote model of
         Nothing ->
-            div [ class "empty" ]
-                [ text "Select a note, or create one with "
-                , span [ class "kbd" ] [ text "+ New" ]
-                , text "."
-                ]
+            div [ class "empty" ] [ text "Select a note, or create one with ", span [ class "kbd" ] [ text "+ New" ], text "." ]
 
         Just note ->
+            let
+                readOnly =
+                    not (mine model note)
+            in
             div [ class "editor" ]
-                [ input
-                    [ class "editor__title"
-                    , value note.title
-                    , placeholder "Title"
-                    , onInput SetTitle
-                    ]
-                    []
-                , textarea
-                    [ class "editor__body"
-                    , value note.body
-                    , placeholder "Start writing…"
-                    , onInput SetBody
-                    ]
-                    []
+                [ input [ class "editor__title", value note.title, placeholder "Title", onInput SetTitle, disabled readOnly ] []
+                , textarea [ class "editor__body", value note.body, placeholder "Start writing…", onInput SetBody, disabled readOnly ] []
                 , div [ class "editor__foot" ]
-                    [ button
-                        [ class "btn btn--danger", onClick (Delete note.id) ]
-                        [ text "Delete" ]
-                    ]
+                    (if readOnly then
+                        [ span [ class "muted" ] [ text ("shared by " ++ String.left 6 note.owner) ] ]
+
+                     else
+                        [ shareControl model note
+                        , button [ class "btn btn--danger", onClick (Delete note.id) ] [ text "Delete" ]
+                        ]
+                    )
                 ]
+
+
+shareControl : Model -> Note -> Html Msg
+shareControl model note =
+    if not (Sync.cloudOn model.sync) then
+        text ""
+
+    else if model.shareFor == Just note.id then
+        div [ class "share-form" ]
+            [ input [ class "sync-in", placeholder "share with login", value model.shareLogin, onInput SetShareLogin ] []
+            , button [ class "btn btn--primary", onClick (DoShare note.id) ] [ text "Share" ]
+            , button [ class "btn btn--ghost", onClick (OpenShare Nothing) ] [ text "×" ]
+            ]
+
+    else
+        button [ class "btn", onClick (OpenShare (Just note.id)) ] [ text "Share" ]
 
 
 selectedNote : Model -> Maybe Note
@@ -241,43 +396,56 @@ nonEmpty s fallback =
 
 
 
--- CODEC ----------------------------------------------------------------------
+-- CODEC
 
 
 encode : Model -> E.Value
 encode model =
     E.object
         [ ( "notes", E.list encodeNote model.notes )
-        , ( "nextId", E.int model.nextId )
+        , ( "seq", E.int model.seq )
+        , ( "sync", Sync.encode model.sync )
         ]
 
 
 encodeNote : Note -> E.Value
 encodeNote note =
     E.object
-        [ ( "id", E.int note.id )
+        [ ( "id", E.string note.id )
         , ( "title", E.string note.title )
         , ( "body", E.string note.body )
+        , ( "owner", E.string note.owner )
         ]
 
 
 decoder : Env -> D.Decoder Model
-decoder _ =
-    D.map2
-        (\notes nextId ->
+decoder env =
+    D.map3
+        (\notes seq sync ->
             { notes = notes
             , selected = Maybe.map .id (List.head notes)
-            , nextId = nextId
+            , seq = seq
             , query = ""
+            , sync = sync
+            , shareFor = Nothing
+            , shareLogin = ""
             }
         )
-        (D.field "notes" (D.list noteDecoder))
-        (D.oneOf [ D.field "nextId" D.int, D.succeed 1 ])
+        (D.oneOf [ D.field "notes" (D.list noteDecoder), D.succeed [] ])
+        (D.oneOf [ D.field "seq" D.int, D.succeed 1 ])
+        (D.oneOf [ D.field "sync" (Sync.decoder config env.newId), D.succeed (Sync.init config env.newId) ])
 
 
 noteDecoder : D.Decoder Note
 noteDecoder =
-    D.map3 Note
-        (D.field "id" D.int)
+    D.map4 Note
+        (D.field "id" idDecoder)
         (D.field "title" D.string)
         (D.field "body" D.string)
+        (D.oneOf [ D.field "owner" D.string, D.succeed "" ])
+
+
+{-| Old files stored integer note ids; accept both so existing notes still load. -}
+idDecoder : D.Decoder String
+idDecoder =
+    D.oneOf [ D.string, D.map String.fromInt D.int ]
