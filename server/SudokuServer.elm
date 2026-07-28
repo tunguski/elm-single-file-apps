@@ -18,9 +18,13 @@ page — origin `null` — may call them):
   - `POST /games`  body `{playerId, puzzleIndex, elapsedMs, solvedAt}` → records a solve, returns that
     player's updated summary as JSON.
   - `GET  /games?playerId=…` → that player's summary + recent games as JSON.
-  - `GET  /`  → an HTML leaderboard: the 10 players with the newest solves, each with the number of
-    games passed and the total time spent solving them.
+  - `GET  /leaderboard`  → an HTML leaderboard: the 10 players with the newest solves, each with the
+    number of games passed and the total time spent solving them.
   - `GET  /health` → `ok` (no database access).
+
+`GET /` (and any other file path) is served from `STATIC_DIR` by the bundle runner *before* this
+handler runs — in production that is the Sudoku game itself (server/Dockerfile copies the built
+app as `index.html`). So the routes below never see `/`.
   - `OPTIONS *` → CORS preflight.
 
 The handler is `Request -> Db Response` — a pure description of the SQL to run; the runner executes it
@@ -64,7 +68,7 @@ route req =
         ( "GET", [ "games" ] ) ->
             getGames req
 
-        ( "GET", [] ) ->
+        ( "GET", [ "leaderboard" ] ) ->
             leaderboard
 
         _ ->
@@ -212,7 +216,7 @@ errorJson status message =
 
 
 
--- GET / — the HTML leaderboard
+-- GET /leaderboard — the HTML leaderboard
 
 
 type alias Rank =
@@ -276,7 +280,7 @@ leaderboardPage players totalGames ranks =
             ++ String.fromInt players
             ++ " players · "
             ++ String.fromInt totalGames
-            ++ " games total · refreshes every 5s</p></header>"
+            ++ " games total · refreshes every 5s · <a href=\"/\">← play Sudoku</a></p></header>"
         , "<table><thead><tr><th>#</th><th>Player</th><th class=\"num\">Games</th>"
         , "<th class=\"num\">Total solve time</th><th>Last update</th></tr></thead>"
         , "<tbody>" ++ rowsHtml ++ "</tbody></table>"
@@ -426,6 +430,7 @@ pageCss =
         , "font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}"
         , ".wrap{max-width:760px;margin:0 auto;padding:48px 20px}"
         , "h1{font-size:26px;margin:0 0 6px}.sub{color:var(--mut);margin:0 0 26px;font-size:13.5px}"
+        , "a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}"
         , "table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--bd);"
         , "border-radius:12px;overflow:hidden}"
         , "th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--bd)}"

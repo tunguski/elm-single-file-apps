@@ -45,11 +45,13 @@ jobs:
           chmod +x ./mvnw
           ./mvnw -B -ntp clean package -DskipTests
 
-      - name: Bundle the server into a standalone jar
+      - name: Build the sudoku app + bundle the server
         run: |
+          ELM="java -jar $GITHUB_WORKSPACE/elm-lang/target/elm.jar" ./build.sh sudoku
+          cp build/sudoku.html server/index.html
           java -jar elm-lang/target/elm.jar bundle server \
             server/SudokuServer.elm --port 8080 -o server/sudoku
-          ls -la server/sudoku.jar
+          ls -la server/sudoku.jar server/index.html
 
       - name: Set up Docker Buildx
         # The default `docker` driver can't export to the GHA cache backend used below; buildx

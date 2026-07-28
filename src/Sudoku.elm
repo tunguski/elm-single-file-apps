@@ -786,7 +786,7 @@ viewLeaderboardLink model =
         text ""
 
     else
-        a [ class "btn btn--ghost", href (apiBase model ++ "/"), target "_blank" ]
+        a [ class "btn btn--ghost", href (apiBase model ++ "/leaderboard"), target "_blank" ]
             [ text "Leaderboard ↗" ]
 
 
