@@ -1,0 +1,26 @@
+# Deploys the Wiki backend as wiki.matsuo.pl — its own compose project on the shared external
+# `podman` network (nginx-proxy + acme-companion route it and issue TLS). Serves the app UI + the
+# /api endpoints; per-user data persists in H2 on the wiki-db volume.
+services:
+  wiki:
+    image: ghcr.io/tunguski/elm-single-file-apps/wiki-server:latest
+    container_name: wiki
+    restart: always
+    environment:
+      - VIRTUAL_HOST=wiki.matsuo.pl
+      - VIRTUAL_PORT=8080
+      - LETSENCRYPT_HOST=wiki.matsuo.pl
+      - LETSENCRYPT_EMAIL=admin@matsuo.pl
+      - DB_URL=jdbc:h2:file:/app/db/wiki
+    volumes:
+      - wiki-db:/app/db
+    networks:
+      - podman
+
+volumes:
+  wiki-db:
+
+networks:
+  podman:
+    name: podman
+    external: true
