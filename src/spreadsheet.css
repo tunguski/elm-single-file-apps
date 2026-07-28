@@ -976,6 +976,44 @@ th.ss-frozen-col {
     font-size: 12px;
 }
 
+/* ---- cloud bar: private/public toggle + browse public sheets ------------ */
+.sheet-cloudbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 6px 14px;
+    border-bottom: 1px solid var(--ss-border);
+    background: #fbfcfe;
+    font-size: 13px;
+}
+.sheet-vis-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    user-select: none;
+}
+.sheet-browse-in {
+    width: 200px;
+    max-width: 40vw;
+    font-size: 13px;
+    padding: 5px 8px;
+    border: 1px solid var(--ss-border);
+    border-radius: 6px;
+}
+.sheet-browse-results {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.sheet-readonly {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ss-header-fg);
+}
+
 /* ---- SheetDoc: the spreadsheet as a workspace document (editor pane) ---- */
 .sheetdoc { display: flex; flex-direction: column; gap: 8px; }
 .sheetdoc-marker {
