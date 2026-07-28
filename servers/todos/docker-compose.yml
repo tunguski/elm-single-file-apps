@@ -1,0 +1,26 @@
+# Deploys the Todos backend as todos.matsuo.pl — its own compose project on the shared external
+# `podman` network (nginx-proxy + acme-companion route it and issue TLS). Serves the app UI + the
+# /api endpoints; per-user data persists in H2 on the todos-db volume.
+services:
+  todos:
+    image: ghcr.io/tunguski/elm-single-file-apps/todos-server:latest
+    container_name: todos
+    restart: always
+    environment:
+      - VIRTUAL_HOST=todos.matsuo.pl
+      - VIRTUAL_PORT=8080
+      - LETSENCRYPT_HOST=todos.matsuo.pl
+      - LETSENCRYPT_EMAIL=admin@matsuo.pl
+      - DB_URL=jdbc:h2:file:/app/db/todos
+    volumes:
+      - todos-db:/app/db
+    networks:
+      - podman
+
+volumes:
+  todos-db:
+
+networks:
+  podman:
+    name: podman
+    external: true
