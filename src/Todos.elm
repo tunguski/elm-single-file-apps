@@ -2,20 +2,25 @@ module Todos exposing (main)
 
 {-| **Todos** — a polished single-list to-do app. Add tasks, tick them off, edit inline, and
 filter by All / Active / Completed. Every list lives inside the file itself; Ctrl+S writes it
-back. See [`App`](App).
+back. Turn on **Cloud** and each task becomes a per-user [`Backend`](Backend) document you can
+share with other users by their login (via [`Sync`](Sync)); shared tasks (owned by someone else)
+show a badge and are read-only. See [`App`](App).
 -}
 
 import App exposing (Env)
 import Html exposing (Html, button, div, footer, header, input, label, li, section, span, text, ul)
-import Html.Attributes exposing (attribute, autofocus, checked, class, classList, placeholder, type_, value)
+import Html.Attributes exposing (attribute, autofocus, checked, class, classList, disabled, placeholder, type_, value)
 import Html.Events exposing (on, onBlur, onClick, onDoubleClick, onInput)
+import Http
 import Json.Decode as D
 import Json.Encode as E
+import Set
+import Sync
 
 
 main : Program () (App.State Model) (App.Event Msg)
 main =
-    App.program
+    App.programEffect
         { init = init
         , update = update
         , view = view
@@ -25,14 +30,20 @@ main =
         }
 
 
+config : Sync.Config
+config =
+    { defaultBase = "https://todos.matsuo.pl" }
+
+
 
 -- MODEL ----------------------------------------------------------------------
 
 
 type alias Task =
-    { id : Int
+    { id : String
     , text : String
     , done : Bool
+    , owner : String -- backend owner uuid; "" for a local-only task
     }
 
 
@@ -46,21 +57,34 @@ type alias Model =
     { tasks : List Task
     , input : String
     , filter : Filter
-    , nextId : Int
-    , editing : Maybe Int
+    , seq : Int
+    , editing : Maybe String
     , editText : String
+    , sync : Sync.Model
+    , shareFor : Maybe String
+    , shareLogin : String
     }
 
 
-init : Env -> Model
-init _ =
-    { tasks = []
-    , input = ""
-    , filter = All
-    , nextId = 1
-    , editing = Nothing
-    , editText = ""
-    }
+init : Env -> ( Model, Cmd Msg )
+init env =
+    ( { tasks = []
+      , input = ""
+      , filter = All
+      , seq = 1
+      , editing = Nothing
+      , editText = ""
+      , sync = Sync.init config env.newId
+      , shareFor = Nothing
+      , shareLogin = ""
+      }
+    , Cmd.none
+    )
+
+
+mine : Model -> Task -> Bool
+mine model task =
+    task.owner == "" || task.owner == model.sync.uid
 
 
 
@@ -70,21 +94,28 @@ init _ =
 type Msg
     = SetInput String
     | Add
-    | Toggle Int
-    | Delete Int
+    | Toggle String
+    | Delete String
     | SetFilter Filter
     | ClearCompleted
-    | StartEdit Int String
+    | StartEdit String String
     | SetEditText String
     | CommitEdit
     | CancelEdit
+    | SyncMsg Sync.Msg
+    | GotDocs (Result Http.Error (List Sync.Doc))
+    | Pushed (Result Http.Error ())
+    | OpenShare (Maybe String)
+    | SetShareLogin String
+    | DoShare String
+    | Shared (Result Http.Error ())
 
 
-update : Msg -> Model -> Model
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         SetInput s ->
-            { model | input = s }
+            ( { model | input = s }, Cmd.none )
 
         Add ->
             let
@@ -92,20 +123,30 @@ update msg model =
                     String.trim model.input
             in
             if trimmed == "" then
-                model
+                ( model, Cmd.none )
 
             else
-                { model
-                    | tasks = model.tasks ++ [ { id = model.nextId, text = trimmed, done = False } ]
+                let
+                    task =
+                        { id = model.sync.uid ++ "-" ++ String.fromInt model.seq
+                        , text = trimmed
+                        , done = False
+                        , owner = model.sync.uid
+                        }
+                in
+                ( { model
+                    | tasks = model.tasks ++ [ task ]
                     , input = ""
-                    , nextId = model.nextId + 1
-                }
+                    , seq = model.seq + 1
+                  }
+                , pushIfCloud model task
+                )
 
         Toggle id ->
-            { model | tasks = mapTask id (\t -> { t | done = not t.done }) model.tasks }
+            editTask model id (\t -> { t | done = not t.done })
 
         Delete id ->
-            { model
+            ( { model
                 | tasks = List.filter (\t -> t.id /= id) model.tasks
                 , editing =
                     if model.editing == Just id then
@@ -113,24 +154,32 @@ update msg model =
 
                     else
                         model.editing
-            }
+              }
+            , removeIfCloud model id
+            )
 
         SetFilter f ->
-            { model | filter = f }
+            ( { model | filter = f }, Cmd.none )
 
         ClearCompleted ->
-            { model | tasks = List.filter (\t -> not t.done) model.tasks }
+            let
+                doomed =
+                    List.filter (\t -> t.done && mine model t) model.tasks
+            in
+            ( { model | tasks = List.filter (\t -> not (t.done && mine model t)) model.tasks }
+            , Cmd.batch (List.map (\t -> removeIfCloud model t.id) doomed)
+            )
 
         StartEdit id current ->
-            { model | editing = Just id, editText = current }
+            ( { model | editing = Just id, editText = current }, Cmd.none )
 
         SetEditText s ->
-            { model | editText = s }
+            ( { model | editText = s }, Cmd.none )
 
         CommitEdit ->
             case model.editing of
                 Nothing ->
-                    model
+                    ( model, Cmd.none )
 
                 Just id ->
                     let
@@ -139,24 +188,85 @@ update msg model =
                     in
                     if trimmed == "" then
                         -- Editing to empty deletes the task, matching the usual TodoMVC feel.
-                        { model
+                        ( { model
                             | tasks = List.filter (\t -> t.id /= id) model.tasks
                             , editing = Nothing
                             , editText = ""
-                        }
+                          }
+                        , removeIfCloud model id
+                        )
 
                     else
-                        { model
-                            | tasks = mapTask id (\t -> { t | text = trimmed }) model.tasks
-                            , editing = Nothing
-                            , editText = ""
-                        }
+                        editTask
+                            { model | editing = Nothing, editText = "" }
+                            id
+                            (\t -> { t | text = trimmed })
 
         CancelEdit ->
-            { model | editing = Nothing, editText = "" }
+            ( { model | editing = Nothing, editText = "" }, Cmd.none )
+
+        SyncMsg m ->
+            let
+                ( sync2, cmd, out ) =
+                    Sync.update m model.sync
+
+                model2 =
+                    { model | sync = sync2 }
+            in
+            case out of
+                Sync.Refresh ->
+                    ( model2, Cmd.batch [ Cmd.map SyncMsg cmd, Sync.pull sync2 GotDocs ] )
+
+                _ ->
+                    ( model2, Cmd.map SyncMsg cmd )
+
+        GotDocs (Ok docs) ->
+            ( mergeDocs docs model, Cmd.none )
+
+        GotDocs (Err _) ->
+            ( model, Cmd.none )
+
+        Pushed _ ->
+            ( model, Cmd.none )
+
+        OpenShare id ->
+            ( { model | shareFor = id, shareLogin = "" }, Cmd.none )
+
+        SetShareLogin s ->
+            ( { model | shareLogin = s }, Cmd.none )
+
+        DoShare id ->
+            ( { model | shareFor = Nothing }, Sync.share model.sync id model.shareLogin Shared )
+
+        Shared _ ->
+            ( model, Cmd.none )
 
 
-mapTask : Int -> (Task -> Task) -> List Task -> List Task
+{-| Apply `f` to the task with `id`, and push the result to the cloud if it is ours. -}
+editTask : Model -> String -> (Task -> Task) -> ( Model, Cmd Msg )
+editTask model id f =
+    let
+        tasks =
+            mapTask id f model.tasks
+
+        changed =
+            List.filter (\t -> t.id == id) tasks
+    in
+    ( { model | tasks = tasks }
+    , case changed of
+        t :: _ ->
+            if mine model t then
+                pushIfCloud model t
+
+            else
+                Cmd.none
+
+        [] ->
+            Cmd.none
+    )
+
+
+mapTask : String -> (Task -> Task) -> List Task -> List Task
 mapTask id f tasks =
     List.map
         (\t ->
@@ -167,6 +277,66 @@ mapTask id f tasks =
                 t
         )
         tasks
+
+
+pushIfCloud : Model -> Task -> Cmd Msg
+pushIfCloud model task =
+    if Sync.cloudOn model.sync then
+        Sync.push model.sync (taskToDoc task) Pushed
+
+    else
+        Cmd.none
+
+
+removeIfCloud : Model -> String -> Cmd Msg
+removeIfCloud model id =
+    if Sync.cloudOn model.sync then
+        Sync.remove model.sync id Shared
+
+    else
+        Cmd.none
+
+
+taskToDoc : Task -> Sync.Doc
+taskToDoc task =
+    { id = task.id
+    , title = task.text
+    , visibility = "private"
+    , owner = task.owner
+    , body = E.object [ ( "text", E.string task.text ), ( "done", E.bool task.done ) ]
+    }
+
+
+docToTask : Sync.Doc -> Maybe Task
+docToTask doc =
+    case D.decodeValue bodyDecoder doc.body of
+        Ok ( t, d ) ->
+            Just { id = doc.id, text = t, done = d, owner = doc.owner }
+
+        Err _ ->
+            Nothing
+
+
+bodyDecoder : D.Decoder ( String, Bool )
+bodyDecoder =
+    D.map2 Tuple.pair
+        (D.oneOf [ D.field "text" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "done" D.bool, D.succeed False ])
+
+
+mergeDocs : List Sync.Doc -> Model -> Model
+mergeDocs docs model =
+    let
+        remote =
+            List.filterMap docToTask docs
+
+        remoteIds =
+            Set.fromList (List.map .id remote)
+
+        localOnly =
+            List.filter (\t -> not (Set.member t.id remoteIds)) model.tasks
+    in
+    { model | tasks = remote ++ localOnly }
 
 
 
@@ -186,51 +356,54 @@ view model =
             List.length (List.filter .done model.tasks)
     in
     div [ class "app" ]
-        [ header [ class "toolbar" ]
-            [ span [ class "toolbar__title" ] [ text "Todos" ]
-            , input
-                [ class "todo-input"
-                , placeholder "What needs doing?"
-                , value model.input
-                , onInput SetInput
-                , onEnter Add
-                ]
-                []
-            , button [ class "btn btn--primary", onClick Add ] [ text "Add" ]
-            ]
-        , section [ class "body" ]
-            [ if List.isEmpty model.tasks then
-                emptyState
-
-              else
-                div []
-                    [ ul [ class "todos" ] (List.map (taskRow model.editing model.editText) visible)
-                    , if List.isEmpty visible then
-                        div [ class "todos-empty muted" ] [ text (noMatchLabel model.filter) ]
-
-                      else
-                        text ""
+        [ Html.map SyncMsg (Sync.view model.sync)
+        , div [ class "app--under-bar" ]
+            [ header [ class "toolbar" ]
+                [ span [ class "toolbar__title" ] [ text "Todos" ]
+                , input
+                    [ class "todo-input"
+                    , placeholder "What needs doing?"
+                    , value model.input
+                    , onInput SetInput
+                    , onEnter Add
                     ]
-            ]
-        , footer [ class "todo-foot" ]
-            [ span [ class "muted todo-count" ] [ text (countLabel remaining) ]
-            , div [ class "filters" ]
-                [ filterBtn model.filter All "All"
-                , filterBtn model.filter Active "Active"
-                , filterBtn model.filter Completed "Completed"
+                    []
+                , button [ class "btn btn--primary", onClick Add ] [ text "Add" ]
                 ]
-            , button
-                [ class "btn btn--ghost"
-                , onClick ClearCompleted
-                , attribute "aria-disabled"
-                    (if completed == 0 then
-                        "true"
+            , section [ class "body" ]
+                [ if List.isEmpty model.tasks then
+                    emptyState
 
-                     else
-                        "false"
-                    )
+                  else
+                    div []
+                        [ ul [ class "todos" ] (List.map (taskRow model) visible)
+                        , if List.isEmpty visible then
+                            div [ class "todos-empty muted" ] [ text (noMatchLabel model.filter) ]
+
+                          else
+                            text ""
+                        ]
                 ]
-                [ text ("Clear completed" ++ completedSuffix completed) ]
+            , footer [ class "todo-foot" ]
+                [ span [ class "muted todo-count" ] [ text (countLabel remaining) ]
+                , div [ class "filters" ]
+                    [ filterBtn model.filter All "All"
+                    , filterBtn model.filter Active "Active"
+                    , filterBtn model.filter Completed "Completed"
+                    ]
+                , button
+                    [ class "btn btn--ghost"
+                    , onClick ClearCompleted
+                    , attribute "aria-disabled"
+                        (if completed == 0 then
+                            "true"
+
+                         else
+                            "false"
+                        )
+                    ]
+                    [ text ("Clear completed" ++ completedSuffix completed) ]
+                ]
             ]
         ]
 
@@ -249,13 +422,13 @@ emptyState =
         ]
 
 
-taskRow : Maybe Int -> String -> Task -> Html Msg
-taskRow editing editText task =
-    if editing == Just task.id then
+taskRow : Model -> Task -> Html Msg
+taskRow model task =
+    if model.editing == Just task.id && mine model task then
         li [ class "todo is-editing" ]
             [ input
                 [ class "todo-edit"
-                , value editText
+                , value model.editText
                 , autofocus True
                 , onInput SetEditText
                 , onEnter CommitEdit
@@ -265,8 +438,8 @@ taskRow editing editText task =
                 []
             ]
 
-    else
-        li [ class "todo", classList [ ( "is-done", task.done ) ] ]
+    else if mine model task then
+        li [ classList [ ( "todo", True ), ( "is-done", task.done ) ] ]
             [ label [ class "todo-check" ]
                 [ input
                     [ type_ "checkbox"
@@ -280,6 +453,7 @@ taskRow editing editText task =
                 , onDoubleClick (StartEdit task.id task.text)
                 ]
                 [ text task.text ]
+            , shareControl model task
             , button
                 [ class "btn btn--danger btn--sm todo-del"
                 , onClick (Delete task.id)
@@ -288,12 +462,41 @@ taskRow editing editText task =
                 [ text "Delete" ]
             ]
 
+    else
+        -- Shared with us by another user: read-only.
+        li [ classList [ ( "todo", True ), ( "is-done", task.done ), ( "is-shared", True ) ] ]
+            [ label [ class "todo-check" ]
+                [ input [ type_ "checkbox", checked task.done, disabled True ] [] ]
+            , span [ class "todo-text" ] [ text task.text ]
+            , span [ class "badge badge--shared" ] [ text "shared" ]
+            ]
+
+
+shareControl : Model -> Task -> Html Msg
+shareControl model task =
+    if not (Sync.cloudOn model.sync) then
+        text ""
+
+    else if model.shareFor == Just task.id then
+        span [ class "share-form" ]
+            [ input [ class "sync-in", placeholder "share with login", value model.shareLogin, onInput SetShareLogin ] []
+            , button [ class "btn btn--primary btn--sm", onClick (DoShare task.id) ] [ text "Share" ]
+            , button [ class "btn btn--ghost btn--sm", onClick (OpenShare Nothing) ] [ text "×" ]
+            ]
+
+    else
+        button [ class "btn btn--ghost btn--sm todo-share", onClick (OpenShare (Just task.id)) ] [ text "Share" ]
+
 
 filterBtn : Filter -> Filter -> String -> Html Msg
 filterBtn current f label_ =
     button
-        [ class "btn btn--ghost filter"
-        , classList [ ( "is-active", current == f ) ]
+        [ classList
+            [ ( "btn", True )
+            , ( "btn--ghost", True )
+            , ( "filter", True )
+            , ( "is-active", current == f )
+            ]
         , onClick (SetFilter f)
         ]
         [ text label_ ]
@@ -380,38 +583,51 @@ encode : Model -> E.Value
 encode model =
     E.object
         [ ( "tasks", E.list encodeTask model.tasks )
-        , ( "nextId", E.int model.nextId )
+        , ( "seq", E.int model.seq )
+        , ( "sync", Sync.encode model.sync )
         ]
 
 
 encodeTask : Task -> E.Value
 encodeTask task =
     E.object
-        [ ( "id", E.int task.id )
+        [ ( "id", E.string task.id )
         , ( "text", E.string task.text )
         , ( "done", E.bool task.done )
+        , ( "owner", E.string task.owner )
         ]
 
 
 decoder : Env -> D.Decoder Model
-decoder _ =
-    D.map2
-        (\tasks nextId ->
+decoder env =
+    D.map3
+        (\tasks seq sync ->
             { tasks = tasks
             , input = ""
             , filter = All
-            , nextId = nextId
+            , seq = seq
             , editing = Nothing
             , editText = ""
+            , sync = sync
+            , shareFor = Nothing
+            , shareLogin = ""
             }
         )
         (D.oneOf [ D.field "tasks" (D.list taskDecoder), D.succeed [] ])
-        (D.oneOf [ D.field "nextId" D.int, D.succeed 1 ])
+        (D.oneOf [ D.field "seq" D.int, D.field "nextId" D.int, D.succeed 1 ])
+        (D.oneOf [ D.field "sync" (Sync.decoder config env.newId), D.succeed (Sync.init config env.newId) ])
 
 
 taskDecoder : D.Decoder Task
 taskDecoder =
-    D.map3 Task
-        (D.field "id" D.int)
+    D.map4 Task
+        (D.field "id" idDecoder)
         (D.field "text" D.string)
         (D.oneOf [ D.field "done" D.bool, D.succeed False ])
+        (D.oneOf [ D.field "owner" D.string, D.succeed "" ])
+
+
+{-| Old files stored integer task ids; accept both so existing lists still load. -}
+idDecoder : D.Decoder String
+idDecoder =
+    D.oneOf [ D.string, D.map String.fromInt D.int ]

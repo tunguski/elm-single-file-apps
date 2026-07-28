@@ -53,14 +53,27 @@
   color: var(--muted);
 }
 
-.todo-del {
+.todo-del,
+.todo-share {
   opacity: 0;
   transition: opacity 0.12s;
 }
 
 .todo:hover .todo-del,
-.todo:focus-within .todo-del {
+.todo:focus-within .todo-del,
+.todo:hover .todo-share,
+.todo:focus-within .todo-share {
   opacity: 1;
+}
+
+/* An open share form must stay visible regardless of hover. */
+.todo .share-form {
+  flex: 0 0 auto;
+}
+
+/* A task shared with us by another user is read-only. */
+.todo.is-shared .todo-text {
+  color: var(--muted);
 }
 
 .btn--sm {
