@@ -3,7 +3,11 @@ module Calendar exposing (main)
 {-| **Calendar** — a month-view calendar with per-day events. Navigate months, jump to today,
 click a day to add or delete events. All date math is pure integer arithmetic (no `Time`); the
 current date arrives via the boot `Env`. Every change round-trips through the embedded data block,
-and Ctrl+S writes the page back to disk. See [`App`](App).
+and Ctrl+S writes the page back to disk.
+
+Events can optionally sync to a [`Backend`](Backend) server via [`Sync`](Sync): turn on **Cloud**, and
+each event becomes a per-user document you can share with other users by their login. Events owned by
+someone else show a badge and are read-only. See [`App`](App).
 -}
 
 import App exposing (Env)
@@ -11,13 +15,16 @@ import Dict exposing (Dict)
 import Html exposing (Html, button, div, form, header, input, li, section, span, text, ul)
 import Html.Attributes exposing (class, classList, disabled, placeholder, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
+import Http
 import Json.Decode as D
 import Json.Encode as E
+import Set
+import Sync
 
 
 main : Program () (App.State Model) (App.Event Msg)
 main =
-    App.program
+    App.programEffect
         { init = init
         , update = update
         , view = view
@@ -27,14 +34,20 @@ main =
         }
 
 
+config : Sync.Config
+config =
+    { defaultBase = "https://calendar.matsuo.pl" }
+
+
 
 -- MODEL ----------------------------------------------------------------------
 
 
 type alias Event =
-    { id : Int
+    { id : String
     , title : String
     , time : String
+    , owner : String -- backend owner uuid; "" for a local-only event
     }
 
 
@@ -43,28 +56,41 @@ type alias Model =
     , year : Int
     , month : Int
     , selected : Maybe String
-    , nextId : Int
+    , seq : Int
     , today : String
     , draftTitle : String
     , draftTime : String
+    , sync : Sync.Model
+    , shareFor : Maybe String
+    , shareLogin : String
     }
 
 
-init : Env -> Model
+init : Env -> ( Model, Cmd Msg )
 init env =
     let
         ( y, m ) =
             defaultYearMonth env.today
     in
-    { events = Dict.empty
-    , year = y
-    , month = m
-    , selected = Nothing
-    , nextId = 1
-    , today = env.today
-    , draftTitle = ""
-    , draftTime = ""
-    }
+    ( { events = Dict.empty
+      , year = y
+      , month = m
+      , selected = Nothing
+      , seq = 1
+      , today = env.today
+      , draftTitle = ""
+      , draftTime = ""
+      , sync = Sync.init config env.newId
+      , shareFor = Nothing
+      , shareLogin = ""
+      }
+    , Cmd.none
+    )
+
+
+mine : Model -> Event -> Bool
+mine model ev =
+    ev.owner == "" || ev.owner == model.sync.uid
 
 
 
@@ -80,10 +106,17 @@ type Msg
     | SetDraftTitle String
     | SetDraftTime String
     | AddEvent
-    | DeleteEvent String Int
+    | DeleteEvent String String
+    | SyncMsg Sync.Msg
+    | GotDocs (Result Http.Error (List Sync.Doc))
+    | Pushed (Result Http.Error ())
+    | OpenShare (Maybe String)
+    | SetShareLogin String
+    | DoShare String
+    | Shared (Result Http.Error ())
 
 
-update : Msg -> Model -> Model
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         PrevMonth ->
@@ -95,7 +128,7 @@ update msg model =
                     else
                         ( model.year, model.month - 1 )
             in
-            { model | year = y, month = m }
+            ( { model | year = y, month = m }, Cmd.none )
 
         NextMonth ->
             let
@@ -106,35 +139,35 @@ update msg model =
                     else
                         ( model.year, model.month + 1 )
             in
-            { model | year = y, month = m }
+            ( { model | year = y, month = m }, Cmd.none )
 
         GoToday ->
             let
                 ( y, m ) =
                     defaultYearMonth model.today
             in
-            { model | year = y, month = m }
+            ( { model | year = y, month = m }, Cmd.none )
 
         SelectDay key ->
             if model.selected == Just key then
-                { model | selected = Nothing }
+                ( { model | selected = Nothing }, Cmd.none )
 
             else
-                { model | selected = Just key, draftTitle = "", draftTime = "" }
+                ( { model | selected = Just key, draftTitle = "", draftTime = "", shareFor = Nothing }, Cmd.none )
 
         ClosePanel ->
-            { model | selected = Nothing }
+            ( { model | selected = Nothing }, Cmd.none )
 
         SetDraftTitle s ->
-            { model | draftTitle = s }
+            ( { model | draftTitle = s }, Cmd.none )
 
         SetDraftTime s ->
-            { model | draftTime = s }
+            ( { model | draftTime = s }, Cmd.none )
 
         AddEvent ->
             case model.selected of
                 Nothing ->
-                    model
+                    ( model, Cmd.none )
 
                 Just key ->
                     let
@@ -142,12 +175,16 @@ update msg model =
                             String.trim model.draftTitle
                     in
                     if title == "" then
-                        model
+                        ( model, Cmd.none )
 
                     else
                         let
                             ev =
-                                { id = model.nextId, title = title, time = String.trim model.draftTime }
+                                { id = model.sync.uid ++ "-" ++ String.fromInt model.seq
+                                , title = title
+                                , time = String.trim model.draftTime
+                                , owner = model.sync.uid
+                                }
 
                             existing =
                                 Maybe.withDefault [] (Dict.get key model.events)
@@ -155,12 +192,14 @@ update msg model =
                             updated =
                                 sortEvents (existing ++ [ ev ])
                         in
-                        { model
+                        ( { model
                             | events = Dict.insert key updated model.events
-                            , nextId = model.nextId + 1
+                            , seq = model.seq + 1
                             , draftTitle = ""
                             , draftTime = ""
-                        }
+                          }
+                        , pushIfCloud model key ev
+                        )
 
         DeleteEvent key id ->
             let
@@ -175,7 +214,43 @@ update msg model =
                     else
                         Dict.insert key remaining model.events
             in
-            { model | events = events }
+            ( { model | events = events }, removeIfCloud model id )
+
+        SyncMsg m ->
+            let
+                ( sync2, cmd, out ) =
+                    Sync.update m model.sync
+
+                model2 =
+                    { model | sync = sync2 }
+            in
+            case out of
+                Sync.Refresh ->
+                    ( model2, Cmd.batch [ Cmd.map SyncMsg cmd, Sync.pull sync2 GotDocs ] )
+
+                _ ->
+                    ( model2, Cmd.map SyncMsg cmd )
+
+        GotDocs (Ok docs) ->
+            ( mergeDocs docs model, Cmd.none )
+
+        GotDocs (Err _) ->
+            ( model, Cmd.none )
+
+        Pushed _ ->
+            ( model, Cmd.none )
+
+        OpenShare id ->
+            ( { model | shareFor = id, shareLogin = "" }, Cmd.none )
+
+        SetShareLogin s ->
+            ( { model | shareLogin = s }, Cmd.none )
+
+        DoShare id ->
+            ( { model | shareFor = Nothing }, Sync.share model.sync id model.shareLogin Shared )
+
+        Shared _ ->
+            ( model, Cmd.none )
 
 
 {-| Events with a time sort ahead of untimed ones; ties keep insertion order via a stable-ish key.
@@ -185,12 +260,93 @@ sortEvents evs =
     List.sortBy
         (\e ->
             if e.time == "" then
-                "~" ++ String.fromInt e.id
+                "~" ++ e.id
 
             else
                 e.time
         )
         evs
+
+
+
+-- SYNC GLUE ------------------------------------------------------------------
+
+
+pushIfCloud : Model -> String -> Event -> Cmd Msg
+pushIfCloud model key ev =
+    if Sync.cloudOn model.sync then
+        Sync.push model.sync (eventToDoc key ev) Pushed
+
+    else
+        Cmd.none
+
+
+removeIfCloud : Model -> String -> Cmd Msg
+removeIfCloud model id =
+    if Sync.cloudOn model.sync then
+        Sync.remove model.sync id Shared
+
+    else
+        Cmd.none
+
+
+eventToDoc : String -> Event -> Sync.Doc
+eventToDoc key ev =
+    { id = ev.id
+    , title = ev.title
+    , visibility = "private"
+    , owner = ev.owner
+    , body =
+        E.object
+            [ ( "date", E.string key )
+            , ( "title", E.string ev.title )
+            , ( "time", E.string ev.time )
+            ]
+    }
+
+
+docToEvent : Sync.Doc -> Maybe ( String, Event )
+docToEvent doc =
+    case D.decodeValue bodyDecoder doc.body of
+        Ok ( date, title, time ) ->
+            Just ( date, { id = doc.id, title = title, time = time, owner = doc.owner } )
+
+        Err _ ->
+            Nothing
+
+
+bodyDecoder : D.Decoder ( String, String, String )
+bodyDecoder =
+    D.map3 (\date title time -> ( date, title, time ))
+        (D.oneOf [ D.field "date" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "title" D.string, D.succeed "Untitled" ])
+        (D.oneOf [ D.field "time" D.string, D.succeed "" ])
+
+
+{-| Rebuild the event dict from the remote events plus any local-only events (by id) not present
+remotely, filing each under its own date. -}
+mergeDocs : List Sync.Doc -> Model -> Model
+mergeDocs docs model =
+    let
+        remotePairs =
+            List.filterMap docToEvent docs
+
+        remoteIds =
+            Set.fromList (List.map (\( _, ev ) -> ev.id) remotePairs)
+
+        localPairs =
+            Dict.toList model.events
+                |> List.concatMap (\( k, evs ) -> List.map (\ev -> ( k, ev )) evs)
+                |> List.filter (\( _, ev ) -> not (Set.member ev.id remoteIds))
+
+        rebuilt =
+            List.foldl
+                (\( k, ev ) acc ->
+                    Dict.update k (\m -> Just (ev :: Maybe.withDefault [] m)) acc)
+                Dict.empty
+                (remotePairs ++ localPairs)
+    in
+    { model | events = Dict.map (\_ evs -> sortEvents evs) rebuilt }
 
 
 
@@ -427,20 +583,23 @@ chunk7 xs =
 view : Model -> Html Msg
 view model =
     div [ class "app" ]
-        [ header [ class "toolbar" ]
-            [ span [ class "toolbar__title" ] [ text "Calendar" ]
-            , span [ class "cal-month" ]
-                [ text (monthName model.month ++ " " ++ String.fromInt model.year) ]
-            , div [ class "cal-nav" ]
-                [ button [ class "btn btn--ghost", onClick PrevMonth ] [ text "‹ Prev" ]
-                , button [ class "btn", onClick GoToday ] [ text "Today" ]
-                , button [ class "btn btn--ghost", onClick NextMonth ] [ text "Next ›" ]
+        [ Html.map SyncMsg (Sync.view model.sync)
+        , div [ class "app--under-bar" ]
+            [ header [ class "toolbar" ]
+                [ span [ class "toolbar__title" ] [ text "Calendar" ]
+                , span [ class "cal-month" ]
+                    [ text (monthName model.month ++ " " ++ String.fromInt model.year) ]
+                , div [ class "cal-nav" ]
+                    [ button [ class "btn btn--ghost", onClick PrevMonth ] [ text "‹ Prev" ]
+                    , button [ class "btn", onClick GoToday ] [ text "Today" ]
+                    , button [ class "btn btn--ghost", onClick NextMonth ] [ text "Next ›" ]
+                    ]
                 ]
-            ]
-        , section [ class "body" ]
-            [ div [ class "cal-layout" ]
-                [ viewGrid model
-                , viewPanel model
+            , section [ class "body" ]
+                [ div [ class "cal-layout" ]
+                    [ viewGrid model
+                    , viewPanel model
+                    ]
                 ]
             ]
         ]
@@ -475,29 +634,23 @@ viewCell model cell =
     let
         dayEvents =
             Maybe.withDefault [] (Dict.get cell.key model.events)
-
-        isToday =
-            cell.key == model.today
-
-        isSelected =
-            model.selected == Just cell.key
     in
     div
         [ classList
             [ ( "cal-cell", True )
             , ( "is-out", not cell.inMonth )
-            , ( "is-today", isToday )
-            , ( "is-selected", isSelected )
+            , ( "is-today", cell.key == model.today )
+            , ( "is-selected", model.selected == Just cell.key )
             ]
         , onClick (SelectDay cell.key)
         ]
         [ div [ class "cal-cell__num" ] [ text (String.fromInt cell.day) ]
-        , viewCellEvents dayEvents
+        , viewCellEvents model dayEvents
         ]
 
 
-viewCellEvents : List Event -> Html Msg
-viewCellEvents evs =
+viewCellEvents : Model -> List Event -> Html Msg
+viewCellEvents model evs =
     case evs of
         [] ->
             text ""
@@ -511,9 +664,7 @@ viewCellEvents evs =
                     List.length evs - List.length shown
 
                 pills =
-                    List.map
-                        (\e -> div [ class "cal-pill" ] [ text (pillLabel e) ])
-                        shown
+                    List.map (viewPill model) shown
 
                 more =
                     if extra > 0 then
@@ -523,6 +674,17 @@ viewCellEvents evs =
                         []
             in
             div [ class "cal-cell__events" ] (pills ++ more)
+
+
+viewPill : Model -> Event -> Html Msg
+viewPill model e =
+    div
+        [ classList
+            [ ( "cal-pill", True )
+            , ( "cal-pill--shared", not (mine model e) )
+            ]
+        ]
+        [ text (pillLabel e) ]
 
 
 pillLabel : Event -> String
@@ -558,7 +720,7 @@ viewPanel model =
 
                   else
                     ul [ class "cal-events" ]
-                        (List.map (viewEventRow key) dayEvents)
+                        (List.map (viewEventRow model key) dayEvents)
                 , form [ class "cal-add", onSubmit AddEvent ]
                     [ input
                         [ class "cal-add__title"
@@ -584,8 +746,8 @@ viewPanel model =
                 ]
 
 
-viewEventRow : String -> Event -> Html Msg
-viewEventRow key e =
+viewEventRow : Model -> String -> Event -> Html Msg
+viewEventRow model key e =
     li [ class "cal-event" ]
         [ span [ class "cal-event__time" ]
             [ text
@@ -596,13 +758,44 @@ viewEventRow key e =
                     e.time
                 )
             ]
-        , span [ class "cal-event__title" ] [ text e.title ]
-        , button
-            [ class "btn btn--danger btn--sm cal-event__del"
-            , onClick (DeleteEvent key e.id)
+        , span [ class "cal-event__title" ]
+            [ text e.title
+            , if mine model e then
+                text ""
+
+              else
+                span [ class "badge badge--shared" ] [ text "shared" ]
             ]
-            [ text "Delete" ]
+        , if mine model e then
+            eventActions model key e
+
+          else
+            span [ class "muted cal-event__owner" ] [ text ("by " ++ String.left 6 e.owner) ]
         ]
+
+
+eventActions : Model -> String -> Event -> Html Msg
+eventActions model key e =
+    if model.shareFor == Just e.id then
+        div [ class "share-form" ]
+            [ input [ class "sync-in", placeholder "share with login", value model.shareLogin, onInput SetShareLogin ] []
+            , button [ class "btn btn--primary btn--sm", onClick (DoShare e.id) ] [ text "Share" ]
+            , button [ class "btn btn--ghost btn--sm", onClick (OpenShare Nothing) ] [ text "×" ]
+            ]
+
+    else
+        span [ class "cal-event__actions" ]
+            [ if Sync.cloudOn model.sync then
+                button [ class "btn btn--sm cal-event__share", onClick (OpenShare (Just e.id)) ] [ text "Share" ]
+
+              else
+                text ""
+            , button
+                [ class "btn btn--danger btn--sm cal-event__del"
+                , onClick (DeleteEvent key e.id)
+                ]
+                [ text "Delete" ]
+            ]
 
 
 prettyDate : String -> String
@@ -652,16 +845,18 @@ encode : Model -> E.Value
 encode model =
     E.object
         [ ( "events", E.dict identity (E.list encodeEvent) model.events )
-        , ( "nextId", E.int model.nextId )
+        , ( "seq", E.int model.seq )
+        , ( "sync", Sync.encode model.sync )
         ]
 
 
 encodeEvent : Event -> E.Value
 encodeEvent e =
     E.object
-        [ ( "id", E.int e.id )
+        [ ( "id", E.string e.id )
         , ( "title", E.string e.title )
         , ( "time", E.string e.time )
+        , ( "owner", E.string e.owner )
         ]
 
 
@@ -671,25 +866,36 @@ decoder env =
         ( y, m ) =
             defaultYearMonth env.today
     in
-    D.map2
-        (\events nextId ->
+    D.map3
+        (\events seq sync ->
             { events = events
             , year = y
             , month = m
             , selected = Nothing
-            , nextId = nextId
+            , seq = seq
             , today = env.today
             , draftTitle = ""
             , draftTime = ""
+            , sync = sync
+            , shareFor = Nothing
+            , shareLogin = ""
             }
         )
         (D.oneOf [ D.field "events" (D.dict (D.list eventDecoder)), D.succeed Dict.empty ])
-        (D.oneOf [ D.field "nextId" D.int, D.succeed 1 ])
+        (D.oneOf [ D.field "seq" D.int, D.field "nextId" D.int, D.succeed 1 ])
+        (D.oneOf [ D.field "sync" (Sync.decoder config env.newId), D.succeed (Sync.init config env.newId) ])
 
 
 eventDecoder : D.Decoder Event
 eventDecoder =
-    D.map3 Event
-        (D.field "id" D.int)
+    D.map4 Event
+        (D.field "id" idDecoder)
         (D.field "title" D.string)
         (D.oneOf [ D.field "time" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "owner" D.string, D.succeed "" ])
+
+
+{-| Old files stored integer event ids; accept both so existing events still load. -}
+idDecoder : D.Decoder String
+idDecoder =
+    D.oneOf [ D.string, D.map String.fromInt D.int ]

@@ -1,5 +1,11 @@
 /* calendar.css — app-specific styling for the Calendar app. Theme-aware via app.css variables. */
 
+/* The area below the Sync account bar stacks the toolbar + calendar body and fills the height. */
+.app--under-bar {
+  display: flex;
+  flex-direction: column;
+}
+
 .toolbar .cal-month {
   font-weight: 650;
   font-size: 16px;
@@ -147,10 +153,45 @@
   text-overflow: ellipsis;
 }
 
+/* An event owned by another user (shared with you) — tinted + a leading marker. */
+.cal-pill--shared {
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: color-mix(in srgb, var(--muted) 60%, var(--text));
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  padding-left: 4px;
+}
+
 .cal-more {
   font-size: 11px;
   color: var(--muted);
   padding: 0 4px;
+}
+
+/* ---- per-event actions in the panel (share / delete) ---- */
+
+.cal-event__actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.cal-event__share,
+.cal-event__del {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.cal-event:hover .cal-event__share,
+.cal-event:hover .cal-event__del,
+.cal-event:focus-within .cal-event__share,
+.cal-event:focus-within .cal-event__del {
+  opacity: 1;
+}
+
+.cal-event__owner {
+  flex: 0 0 auto;
+  font-size: 11.5px;
 }
 
 /* ---- side panel ---- */
