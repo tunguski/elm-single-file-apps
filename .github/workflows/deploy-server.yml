@@ -10,6 +10,8 @@ on:
     branches: [master, main]
     paths:
       - "server/**"
+      - "src/**"
+      - "shared/**"
       - ".github/workflows/deploy-server.yml"
   workflow_dispatch:
 
