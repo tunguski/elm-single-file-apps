@@ -1,23 +1,36 @@
 module Wiki exposing (main)
 
-{-| **Wiki** — a personal wiki of interlinked plain-text pages. Pages are keyed by title; the body
-of any page can link to another with `[[Some Page]]`. Clicking a link opens that page, creating it
-empty if it doesn't exist yet. All pages live in the file itself; Ctrl+S writes them back.
-See [`App`](App).
+{-| **Wiki** — a wiki of interlinked plain-text pages. Any page's body can link to another with
+`[[Some Page]]`. Pages live in the file itself (Ctrl+S), and can optionally sync to a
+[`Backend`](Backend) server via [`Sync`](Sync).
+
+Two namespaces:
+
+  - **Personal** — your own pages (private) plus pages shared with you. Owned pages are full CRUD and,
+    with **Cloud** on, are pushed to the server (and deleted from it). Others' pages are read-only.
+  - **Global** — public pages from every user. Search the server (`Sync.search`) and browse the
+    results; the client keeps a capped cache of the last few global pages you opened (persisted in the
+    file). Global pages are read-only.
+
+Owned pages can be **published** (visibility → public, which lists them in Global) and **shared** with
+a specific user by login. See [`App`](App).
 -}
 
 import App exposing (Env)
 import Dict exposing (Dict)
 import Html exposing (Html, a, button, div, h2, h3, header, input, li, span, text, textarea, ul)
-import Html.Attributes exposing (class, classList, placeholder, value)
+import Html.Attributes exposing (class, classList, disabled, placeholder, value)
 import Html.Events exposing (onClick, onInput)
+import Http
 import Json.Decode as D
 import Json.Encode as E
+import Set exposing (Set)
+import Sync
 
 
 main : Program () (App.State Model) (App.Event Msg)
 main =
-    App.program
+    App.programEffect
         { init = init
         , update = update
         , view = view
@@ -27,27 +40,77 @@ main =
         }
 
 
+config : Sync.Config
+config =
+    { defaultBase = "https://wiki.matsuo.pl" }
+
+
+globalCacheLimit : Int
+globalCacheLimit =
+    20
+
+
 
 -- MODEL ----------------------------------------------------------------------
 
 
+type alias Page =
+    { id : String
+    , title : String
+    , body : String
+    , owner : String -- backend owner uuid; "" for a local-only page
+    , visibility : String -- "private" | "public"
+    }
+
+
+type Namespace
+    = Personal
+    | Global
+
+
 type alias Model =
-    { pages : Dict String String
-    , current : String
+    { pages : List Page -- personal pages (owned + shared with me)
+    , globalCache : List Page -- capped cache of recently opened public pages
+    , globalResults : List Page -- last Sync.search results (not persisted)
+    , namespace : Namespace
+    , current : Maybe String -- id of the open page
     , editing : Bool
     , query : String
-    , draftTitle : String
+    , seq : Int
+    , sync : Sync.Model
+    , shareFor : Maybe String
+    , shareLogin : String
     }
 
 
-init : Env -> Model
-init _ =
-    { pages = Dict.singleton "Home" homeBody
-    , current = "Home"
-    , editing = False
-    , query = ""
-    , draftTitle = ""
-    }
+init : Env -> ( Model, Cmd Msg )
+init env =
+    let
+        sync =
+            Sync.init config env.newId
+
+        home =
+            defaultHome sync.uid
+    in
+    ( { pages = [ home ]
+      , globalCache = []
+      , globalResults = []
+      , namespace = Personal
+      , current = Just home.id
+      , editing = False
+      , query = ""
+      , seq = 2
+      , sync = sync
+      , shareFor = Nothing
+      , shareLogin = ""
+      }
+    , Cmd.none
+    )
+
+
+defaultHome : String -> Page
+defaultHome uid =
+    { id = uid ++ "-1", title = "Home", body = homeBody, owner = uid, visibility = "private" }
 
 
 homeBody : String
@@ -55,12 +118,40 @@ homeBody =
     String.join "\n"
         [ "# Welcome"
         , ""
-        , "This is your personal wiki. Every page can link to another using double"
-        , "brackets, like [[Ideas]] or [[Reading list]]."
+        , "This is your wiki. Every page can link to another using double brackets,"
+        , "like [[Ideas]] or [[Reading list]]."
         , ""
         , "Click a link to open that page — a missing page is created empty the first"
         , "time you visit it. Hit Edit to write, Done to save."
+        , ""
+        , "Turn on Cloud to sync your pages, publish a page to the Global namespace, or"
+        , "share it with another user."
         ]
+
+
+isOwn : Model -> Page -> Bool
+isOwn model page =
+    page.owner == "" || page.owner == model.sync.uid
+
+
+canEdit : Model -> Page -> Bool
+canEdit model page =
+    isOwn model page
+
+
+knownPages : Model -> List Page
+knownPages model =
+    model.pages ++ model.globalCache ++ model.globalResults
+
+
+findById : String -> Model -> Maybe Page
+findById id model =
+    List.head (List.filter (\p -> p.id == id) (knownPages model))
+
+
+selectedPage : Model -> Maybe Page
+selectedPage model =
+    Maybe.andThen (\id -> findById id model) model.current
 
 
 
@@ -69,109 +160,343 @@ homeBody =
 
 type Msg
     = Navigate String
+    | Select String
+    | OpenGlobal Page
     | New
     | SetQuery String
     | SetBody String
     | SetTitle String
     | ToggleEdit
     | Delete
+    | SetNamespace Namespace
+    | DoSearch
+    | TogglePublish
+    | SyncMsg Sync.Msg
+    | GotDocs (Result Http.Error (List Sync.Doc))
+    | GotGlobal (Result Http.Error (List Sync.Doc))
+    | Pushed (Result Http.Error ())
+    | OpenShare (Maybe String)
+    | SetShareLogin String
+    | DoShare String
+    | Shared (Result Http.Error ())
 
 
-update : Msg -> Model -> Model
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        Navigate target ->
-            let
-                base =
-                    if model.editing then
-                        commitRename { model | editing = False }
-
-                    else
-                        model
-
-                trimmed =
-                    String.trim target
-
-                pages =
-                    if Dict.member trimmed base.pages then
-                        base.pages
-
-                    else
-                        Dict.insert trimmed "" base.pages
-            in
-            { base | pages = pages, current = trimmed, editing = False }
-
-        New ->
+        Navigate raw ->
             let
                 title =
-                    uniqueTitle model.pages "New page"
+                    String.trim raw
             in
-            { model
-                | pages = Dict.insert title "" model.pages
-                , current = title
-                , editing = True
-                , draftTitle = title
-                , query = ""
-            }
+            case findByTitle model.pages title of
+                Just p ->
+                    ( { model | current = Just p.id, namespace = Personal, editing = False }, Cmd.none )
+
+                Nothing ->
+                    case findByTitle model.globalCache title of
+                        Just p ->
+                            ( { model
+                                | current = Just p.id
+                                , namespace = Global
+                                , editing = False
+                                , globalCache = cacheOpen p model.globalCache
+                              }
+                            , Cmd.none
+                            )
+
+                        Nothing ->
+                            createPage title model
+
+        Select id ->
+            ( { model | current = Just id, editing = False, shareFor = Nothing }, Cmd.none )
+
+        OpenGlobal page ->
+            ( { model
+                | current = Just page.id
+                , namespace = Global
+                , editing = False
+                , shareFor = Nothing
+                , globalCache = cacheOpen page model.globalCache
+              }
+            , Cmd.none
+            )
+
+        New ->
+            createNamed (uniqueTitle model.pages "New page") { model | editing = True, query = "" }
 
         SetQuery q ->
-            { model | query = q }
+            ( { model | query = q }, Cmd.none )
 
         SetBody b ->
-            { model | pages = Dict.insert model.current b model.pages }
+            editSelected model (\p -> { p | body = b })
 
         SetTitle t ->
-            { model | draftTitle = t }
+            editSelected model (\p -> { p | title = t })
 
         ToggleEdit ->
-            if model.editing then
-                commitRename { model | editing = False }
+            ( { model | editing = not model.editing }, Cmd.none )
 
-            else
-                { model | editing = True, draftTitle = model.current }
+        TogglePublish ->
+            editSelected model
+                (\p ->
+                    { p
+                        | visibility =
+                            if p.visibility == "public" then
+                                "private"
+
+                            else
+                                "public"
+                    }
+                )
 
         Delete ->
+            case model.current of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just id ->
+                    let
+                        pages =
+                            List.filter (\p -> p.id /= id) model.pages
+                    in
+                    ( { model
+                        | pages = pages
+                        , current = Maybe.map .id (List.head pages)
+                        , editing = False
+                      }
+                    , removeIfCloud model id
+                    )
+
+        SetNamespace ns ->
             let
-                pruned =
-                    Dict.remove model.current model.pages
+                cur =
+                    case ns of
+                        Personal ->
+                            Maybe.map .id (List.head model.pages)
 
-                ( pages, current ) =
-                    case Dict.keys pruned of
-                        first :: _ ->
-                            ( pruned, first )
-
-                        [] ->
-                            ( Dict.singleton "Home" "", "Home" )
+                        Global ->
+                            Maybe.map .id (List.head (globalList model))
             in
-            { model | pages = pages, current = current, editing = False }
+            ( { model | namespace = ns, editing = False, current = cur, shareFor = Nothing }, Cmd.none )
+
+        DoSearch ->
+            ( model, Sync.search model.sync model.query GotGlobal )
+
+        SyncMsg m ->
+            let
+                ( sync2, cmd, out ) =
+                    Sync.update m model.sync
+
+                model2 =
+                    { model | sync = sync2 }
+            in
+            case out of
+                Sync.Refresh ->
+                    ( model2, Cmd.batch [ Cmd.map SyncMsg cmd, Sync.pull sync2 GotDocs ] )
+
+                _ ->
+                    ( model2, Cmd.map SyncMsg cmd )
+
+        GotDocs (Ok docs) ->
+            ( mergeDocs docs model, Cmd.none )
+
+        GotDocs (Err _) ->
+            ( model, Cmd.none )
+
+        GotGlobal (Ok docs) ->
+            ( { model | globalResults = List.filterMap docToPage docs }, Cmd.none )
+
+        GotGlobal (Err _) ->
+            ( model, Cmd.none )
+
+        Pushed _ ->
+            ( model, Cmd.none )
+
+        OpenShare id ->
+            ( { model | shareFor = id, shareLogin = "" }, Cmd.none )
+
+        SetShareLogin s ->
+            ( { model | shareLogin = s }, Cmd.none )
+
+        DoShare id ->
+            ( { model | shareFor = Nothing }, Sync.share model.sync id model.shareLogin Shared )
+
+        Shared _ ->
+            ( model, Cmd.none )
 
 
-{-| Apply a pending title edit: move the current page's body under the new title. Refuses empty
-titles, no-op renames, and names that would clobber an existing page.
--}
-commitRename : Model -> Model
-commitRename model =
+{-| Create a page with the given exact title (used by New; a fresh id is minted). -}
+createNamed : String -> Model -> ( Model, Cmd Msg )
+createNamed title model =
     let
-        new =
-            String.trim model.draftTitle
+        id =
+            model.sync.uid ++ "-" ++ String.fromInt model.seq
+
+        page =
+            { id = id, title = title, body = "", owner = model.sync.uid, visibility = "private" }
     in
-    if new == "" || new == model.current || Dict.member new model.pages then
-        model
+    ( { model
+        | pages = page :: model.pages
+        , current = Just id
+        , seq = model.seq + 1
+        , namespace = Personal
+      }
+    , pushIfCloud model page
+    )
+
+
+{-| Create a personal page for a followed [[link]] that resolved nowhere. -}
+createPage : String -> Model -> ( Model, Cmd Msg )
+createPage title model =
+    createNamed title { model | editing = False }
+
+
+editSelected : Model -> (Page -> Page) -> ( Model, Cmd Msg )
+editSelected model f =
+    case model.current of
+        Nothing ->
+            ( model, Cmd.none )
+
+        Just id ->
+            let
+                pages =
+                    List.map
+                        (\p ->
+                            if p.id == id then
+                                f p
+
+                            else
+                                p
+                        )
+                        model.pages
+
+                changed =
+                    List.filter (\p -> p.id == id) pages
+            in
+            ( { model | pages = pages }
+            , case changed of
+                p :: _ ->
+                    if isOwn model p then
+                        pushIfCloud model p
+
+                    else
+                        Cmd.none
+
+                [] ->
+                    Cmd.none
+            )
+
+
+cacheOpen : Page -> List Page -> List Page
+cacheOpen page cache =
+    (page :: List.filter (\p -> p.id /= page.id) cache)
+        |> List.take globalCacheLimit
+
+
+pushIfCloud : Model -> Page -> Cmd Msg
+pushIfCloud model page =
+    if Sync.cloudOn model.sync then
+        Sync.push model.sync (pageToDoc page) Pushed
 
     else
-        let
-            body =
-                Maybe.withDefault "" (Dict.get model.current model.pages)
-
-            pages =
-                Dict.insert new body (Dict.remove model.current model.pages)
-        in
-        { model | pages = pages, current = new }
+        Cmd.none
 
 
-uniqueTitle : Dict String String -> String -> String
+removeIfCloud : Model -> String -> Cmd Msg
+removeIfCloud model id =
+    if Sync.cloudOn model.sync then
+        Sync.remove model.sync id Shared
+
+    else
+        Cmd.none
+
+
+pageToDoc : Page -> Sync.Doc
+pageToDoc page =
+    { id = page.id
+    , title = page.title
+    , visibility = page.visibility
+    , owner = page.owner
+    , body = E.object [ ( "title", E.string page.title ), ( "body", E.string page.body ) ]
+    }
+
+
+docToPage : Sync.Doc -> Maybe Page
+docToPage doc =
+    case D.decodeValue bodyDecoder doc.body of
+        Ok ( t, b ) ->
+            Just
+                { id = doc.id
+                , title =
+                    if String.trim t == "" then
+                        doc.title
+
+                    else
+                        t
+                , body = b
+                , owner = doc.owner
+                , visibility = doc.visibility
+                }
+
+        Err _ ->
+            Nothing
+
+
+bodyDecoder : D.Decoder ( String, String )
+bodyDecoder =
+    D.map2 Tuple.pair
+        (D.oneOf [ D.field "title" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "body" D.string, D.succeed "" ])
+
+
+mergeDocs : List Sync.Doc -> Model -> Model
+mergeDocs docs model =
+    let
+        remote =
+            List.filterMap docToPage docs
+
+        remoteIds =
+            Set.fromList (List.map .id remote)
+
+        localOnly =
+            List.filter (\p -> not (Set.member p.id remoteIds)) model.pages
+    in
+    { model | pages = remote ++ localOnly }
+
+
+findByTitle : List Page -> String -> Maybe Page
+findByTitle pages title =
+    List.head (List.filter (\p -> p.title == title) pages)
+
+
+globalList : Model -> List Page
+globalList model =
+    dedupById (model.globalResults ++ model.globalCache)
+
+
+dedupById : List Page -> List Page
+dedupById pages =
+    let
+        step page ( seen, acc ) =
+            if Set.member page.id seen then
+                ( seen, acc )
+
+            else
+                ( Set.insert page.id seen, page :: acc )
+    in
+    List.foldl step ( Set.empty, [] ) pages
+        |> Tuple.second
+        |> List.reverse
+
+
+uniqueTitle : List Page -> String -> String
 uniqueTitle pages base =
-    if not (Dict.member base pages) then
+    let
+        taken t =
+            List.any (\p -> p.title == t) pages
+    in
+    if not (taken base) then
         base
 
     else
@@ -181,7 +506,7 @@ uniqueTitle pages base =
                     candidate =
                         base ++ " " ++ String.fromInt n
                 in
-                if Dict.member candidate pages then
+                if taken candidate then
                     go (n + 1)
 
                 else
@@ -196,26 +521,76 @@ uniqueTitle pages base =
 
 view : Model -> Html Msg
 view model =
-    let
-        titles =
-            List.filter (matchesQuery model.query) (Dict.keys model.pages)
-    in
-    div [ class "app app--split" ]
-        [ div [ class "pane pane--list" ]
-            [ header [ class "pane__head" ]
-                [ input
-                    [ class "search"
-                    , placeholder "Search pages…"
-                    , value model.query
-                    , onInput SetQuery
+    div [ class "app" ]
+        [ Html.map SyncMsg (Sync.view model.sync)
+        , div [ class "app--split app--under-bar" ]
+            [ div [ class "pane pane--list" ]
+                [ nsSwitch model
+                , header [ class "pane__head" ]
+                    [ input
+                        [ class "search"
+                        , placeholder (searchPlaceholder model.namespace)
+                        , value model.query
+                        , onInput SetQuery
+                        ]
+                        []
+                    , actionButton model
                     ]
-                    []
-                , button [ class "btn btn--primary", onClick New ] [ text "+ New page" ]
+                , ul [ class "list" ] (listRows model)
                 ]
-            , ul [ class "list" ] (List.map (pageRow model) titles)
+            , div [ class "pane pane--main" ] [ mainPane model ]
             ]
-        , div [ class "pane pane--main" ] [ main_ model ]
         ]
+
+
+nsSwitch : Model -> Html Msg
+nsSwitch model =
+    div [ class "wiki-ns" ]
+        [ button
+            [ classList [ ( "btn", True ), ( "btn--primary", model.namespace == Personal ) ]
+            , onClick (SetNamespace Personal)
+            ]
+            [ text "Personal" ]
+        , button
+            [ classList [ ( "btn", True ), ( "btn--primary", model.namespace == Global ) ]
+            , onClick (SetNamespace Global)
+            ]
+            [ text "Global" ]
+        ]
+
+
+searchPlaceholder : Namespace -> String
+searchPlaceholder ns =
+    case ns of
+        Personal ->
+            "Search pages…"
+
+        Global ->
+            "Search public pages…"
+
+
+actionButton : Model -> Html Msg
+actionButton model =
+    case model.namespace of
+        Personal ->
+            button [ class "btn btn--primary", onClick New ] [ text "+ New page" ]
+
+        Global ->
+            button [ class "btn btn--primary", onClick DoSearch ] [ text "Search" ]
+
+
+listRows : Model -> List (Html Msg)
+listRows model =
+    case model.namespace of
+        Personal ->
+            model.pages
+                |> List.filter (\p -> matchesQuery model.query p.title)
+                |> List.map (personalRow model)
+
+        Global ->
+            globalList model
+                |> List.filter (\p -> matchesQuery model.query p.title)
+                |> List.map (globalRow model)
 
 
 matchesQuery : String -> String -> Bool
@@ -227,17 +602,46 @@ matchesQuery q title =
     needle == "" || String.contains needle (String.toLower title)
 
 
-pageRow : Model -> String -> Html Msg
-pageRow model title =
+personalRow : Model -> Page -> Html Msg
+personalRow model page =
+    pageRow model page (Select page.id) (personalBadges model page)
+
+
+globalRow : Model -> Page -> Html Msg
+globalRow model page =
+    pageRow model page (OpenGlobal page) [ publicBadge ]
+
+
+pageRow : Model -> Page -> Msg -> List (Html Msg) -> Html Msg
+pageRow model page msg badges =
     li
-        [ class "list__item"
-        , classList [ ( "is-active", title == model.current ) ]
-        , onClick (Navigate title)
+        [ classList [ ( "list__item", True ), ( "is-active", model.current == Just page.id ) ]
+        , onClick msg
         ]
-        [ span [ class "list__title" ] [ text title ]
-        , span [ class "list__sub" ]
-            [ text (preview (Maybe.withDefault "" (Dict.get title model.pages))) ]
+        [ span [ class "list__title" ] (text (nonEmpty page.title "Untitled") :: badges)
+        , span [ class "list__sub" ] [ text (preview page.body) ]
         ]
+
+
+personalBadges : Model -> Page -> List (Html Msg)
+personalBadges model page =
+    (if page.visibility == "public" then
+        [ publicBadge ]
+
+     else
+        []
+    )
+        ++ (if isOwn model page then
+                []
+
+            else
+                [ span [ class "badge badge--shared" ] [ text "shared" ] ]
+           )
+
+
+publicBadge : Html Msg
+publicBadge =
+    span [ class "badge badge--public" ] [ text "public" ]
 
 
 preview : String -> String
@@ -256,8 +660,7 @@ preview body =
         flat
 
 
-{-| Strip the `#` heading marker and `[[ ]]` brackets so list previews read as plain prose.
--}
+{-| Strip the `#` heading marker and `[[ ]]` brackets so list previews read as plain prose. -}
 stripMarkup : String -> String
 stripMarkup body =
     body
@@ -266,41 +669,105 @@ stripMarkup body =
         |> String.replace "# " ""
 
 
-main_ : Model -> Html Msg
-main_ model =
-    if model.editing then
-        editor model
+mainPane : Model -> Html Msg
+mainPane model =
+    case selectedPage model of
+        Nothing ->
+            div [ class "empty" ]
+                [ text (emptyHint model.namespace) ]
 
-    else
-        reader model
+        Just page ->
+            if model.editing && canEdit model page then
+                editor model page
+
+            else
+                reader model page
 
 
-reader : Model -> Html Msg
-reader model =
+emptyHint : Namespace -> String
+emptyHint ns =
+    case ns of
+        Personal ->
+            "Select a page, or create one with + New page."
+
+        Global ->
+            "Search for public pages, then open one to read it."
+
+
+reader : Model -> Page -> Html Msg
+reader model page =
     div [ class "editor" ]
         [ div [ class "wiki-head" ]
-            [ h2 [ class "wiki-title" ] [ text model.current ]
-            , div [ class "wiki-actions" ]
-                [ button [ class "btn", onClick ToggleEdit ] [ text "Edit" ] ]
+            [ h2 [ class "wiki-title" ] [ text (nonEmpty page.title "Untitled") ]
+            , metaBadge page
+            , div [ class "wiki-actions" ] (readerActions model page)
             ]
-        , div [ class "editor__body wiki-doc" ]
-            (viewBody model.pages (Maybe.withDefault "" (Dict.get model.current model.pages)))
+        , div [ class "editor__body wiki-doc" ] (viewBody model page.body)
         ]
 
 
-editor : Model -> Html Msg
-editor model =
+metaBadge : Page -> Html Msg
+metaBadge page =
+    if page.visibility == "public" then
+        publicBadge
+
+    else
+        text ""
+
+
+readerActions : Model -> Page -> List (Html Msg)
+readerActions model page =
+    if canEdit model page then
+        [ button [ class "btn", onClick ToggleEdit ] [ text "Edit" ]
+        , publishControl model page
+        , shareControl model page
+        ]
+
+    else
+        [ span [ class "muted" ] [ text ("read only — by " ++ String.left 6 page.owner) ] ]
+
+
+publishControl : Model -> Page -> Html Msg
+publishControl model page =
+    if not (Sync.cloudOn model.sync) then
+        text ""
+
+    else if page.visibility == "public" then
+        button [ class "btn", onClick TogglePublish ] [ text "Unpublish" ]
+
+    else
+        button [ class "btn", onClick TogglePublish ] [ text "Publish" ]
+
+
+shareControl : Model -> Page -> Html Msg
+shareControl model page =
+    if not (Sync.cloudOn model.sync) then
+        text ""
+
+    else if model.shareFor == Just page.id then
+        div [ class "share-form" ]
+            [ input [ class "sync-in", placeholder "share with login", value model.shareLogin, onInput SetShareLogin ] []
+            , button [ class "btn btn--primary", onClick (DoShare page.id) ] [ text "Share" ]
+            , button [ class "btn btn--ghost", onClick (OpenShare Nothing) ] [ text "×" ]
+            ]
+
+    else
+        button [ class "btn", onClick (OpenShare (Just page.id)) ] [ text "Share" ]
+
+
+editor : Model -> Page -> Html Msg
+editor _ page =
     div [ class "editor" ]
         [ input
             [ class "editor__title"
-            , value model.draftTitle
+            , value page.title
             , placeholder "Page title"
             , onInput SetTitle
             ]
             []
         , textarea
             [ class "editor__body wiki-source"
-            , value (Maybe.withDefault "" (Dict.get model.current model.pages))
+            , value page.body
             , placeholder "Write here… link to another page with [[Its Title]]."
             , onInput SetBody
             ]
@@ -312,33 +779,46 @@ editor model =
         ]
 
 
+nonEmpty : String -> String -> String
+nonEmpty s fallback =
+    if String.trim s == "" then
+        fallback
+
+    else
+        s
+
+
 
 -- RENDERING WIKI BODY --------------------------------------------------------
 
 
-viewBody : Dict String String -> String -> List (Html Msg)
-viewBody pages body =
-    List.map (viewLine pages) (String.split "\n" body)
+viewBody : Model -> String -> List (Html Msg)
+viewBody model body =
+    let
+        known =
+            Set.fromList (List.map .title (knownPages model))
+    in
+    List.map (viewLine known) (String.split "\n" body)
 
 
-viewLine : Dict String String -> String -> Html Msg
-viewLine pages line =
+viewLine : Set String -> String -> Html Msg
+viewLine known line =
     if String.startsWith "# " line then
-        h2 [ class "wiki-h1" ] (inline pages (String.dropLeft 2 line))
+        h2 [ class "wiki-h1" ] (inline known (String.dropLeft 2 line))
 
     else if String.startsWith "## " line then
-        h3 [ class "wiki-h2" ] (inline pages (String.dropLeft 3 line))
+        h3 [ class "wiki-h2" ] (inline known (String.dropLeft 3 line))
 
     else if String.trim line == "" then
         div [ class "wiki-blank" ] []
 
     else
-        div [ class "wiki-line" ] (inline pages line)
+        div [ class "wiki-line" ] (inline known line)
 
 
-inline : Dict String String -> String -> List (Html Msg)
-inline pages line =
-    List.map (viewSegment pages) (parseSegments line)
+inline : Set String -> String -> List (Html Msg)
+inline known line =
+    List.map (viewSegment known) (parseSegments line)
 
 
 type Segment
@@ -346,8 +826,7 @@ type Segment
     | Lnk String
 
 
-{-| Split a line into plain-text runs and `[[wiki links]]`. An unterminated `[[` is left as text.
--}
+{-| Split a line into plain-text runs and `[[wiki links]]`. An unterminated `[[` is left as text. -}
 parseSegments : String -> List Segment
 parseSegments str =
     case String.indexes "[[" str of
@@ -386,20 +865,15 @@ keepText s =
         [ Txt s ]
 
 
-viewSegment : Dict String String -> Segment -> Html Msg
-viewSegment pages seg =
+viewSegment : Set String -> Segment -> Html Msg
+viewSegment known seg =
     case seg of
         Txt t ->
             text t
 
         Lnk target ->
-            let
-                exists =
-                    Dict.member target pages
-            in
             a
-                [ class "wiki-link"
-                , classList [ ( "wiki-link--new", not exists ) ]
+                [ classList [ ( "wiki-link", True ), ( "wiki-link--new", not (Set.member target known) ) ]
                 , onClick (Navigate target)
                 ]
                 [ text target ]
@@ -412,36 +886,154 @@ viewSegment pages seg =
 encode : Model -> E.Value
 encode model =
     E.object
-        [ ( "pages", E.dict identity E.string model.pages )
-        , ( "current", E.string model.current )
+        [ ( "pages", E.list encodePage model.pages )
+        , ( "globalCache", E.list encodePage model.globalCache )
+        , ( "current", maybe E.string model.current )
+        , ( "seq", E.int model.seq )
+        , ( "namespace", E.string (nsToString model.namespace) )
+        , ( "sync", Sync.encode model.sync )
         ]
 
 
+encodePage : Page -> E.Value
+encodePage page =
+    E.object
+        [ ( "id", E.string page.id )
+        , ( "title", E.string page.title )
+        , ( "body", E.string page.body )
+        , ( "owner", E.string page.owner )
+        , ( "visibility", E.string page.visibility )
+        ]
+
+
+nsToString : Namespace -> String
+nsToString ns =
+    case ns of
+        Personal ->
+            "personal"
+
+        Global ->
+            "global"
+
+
+nsFromString : String -> Namespace
+nsFromString s =
+    if s == "global" then
+        Global
+
+    else
+        Personal
+
+
+maybe : (a -> E.Value) -> Maybe a -> E.Value
+maybe f m =
+    case m of
+        Just v ->
+            f v
+
+        Nothing ->
+            E.null
+
+
 decoder : Env -> D.Decoder Model
-decoder _ =
-    D.map2
-        (\pages rawCurrent ->
-            let
-                filled =
-                    if Dict.isEmpty pages then
-                        Dict.singleton "Home" homeBody
-
-                    else
-                        pages
-
-                current =
-                    if Dict.member rawCurrent filled then
-                        rawCurrent
-
-                    else
-                        Maybe.withDefault "Home" (List.head (Dict.keys filled))
-            in
-            { pages = filled
-            , current = current
-            , editing = False
-            , query = ""
-            , draftTitle = ""
-            }
+decoder env =
+    D.map6 assemble
+        (D.oneOf [ D.field "sync" (Sync.decoder config env.newId), D.succeed (Sync.init config env.newId) ])
+        (D.oneOf
+            [ D.field "pages" (D.list pageDecoder)
+            , D.field "pages" (D.map dictToPages (D.dict D.string)) -- migrate old title→body files
+            , D.succeed []
+            ]
         )
-        (D.oneOf [ D.field "pages" (D.dict D.string), D.succeed Dict.empty ])
-        (D.oneOf [ D.field "current" D.string, D.succeed "Home" ])
+        (D.oneOf [ D.field "globalCache" (D.list pageDecoder), D.succeed [] ])
+        (D.oneOf [ D.field "seq" D.int, D.succeed 1 ])
+        (D.oneOf [ D.field "current" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "namespace" D.string, D.succeed "personal" ])
+
+
+assemble : Sync.Model -> List Page -> List Page -> Int -> String -> String -> Model
+assemble sync pagesRaw cacheRaw seqRaw currentRaw nsRaw =
+    let
+        ( assigned, seq1 ) =
+            assignIds sync.uid (max seqRaw 1) pagesRaw
+
+        pages =
+            if List.isEmpty assigned then
+                [ defaultHome sync.uid ]
+
+            else
+                assigned
+
+        seqFinal =
+            if List.isEmpty assigned then
+                max seq1 2
+
+            else
+                seq1
+
+        ( cache, _ ) =
+            assignIds sync.uid seqFinal cacheRaw
+
+        current =
+            resolveCurrent currentRaw pages
+    in
+    { pages = pages
+    , globalCache = cache
+    , globalResults = []
+    , namespace = nsFromString nsRaw
+    , current = current
+    , editing = False
+    , query = ""
+    , seq = seqFinal
+    , sync = sync
+    , shareFor = Nothing
+    , shareLogin = ""
+    }
+
+
+{-| Give any page that lacks an id (a migrated dict entry) a fresh unique id, returning the next
+free sequence number. -}
+assignIds : String -> Int -> List Page -> ( List Page, Int )
+assignIds uid startSeq pages =
+    let
+        step page ( acc, seq ) =
+            if page.id == "" then
+                ( { page | id = uid ++ "-" ++ String.fromInt seq } :: acc, seq + 1 )
+
+            else
+                ( page :: acc, seq )
+    in
+    List.foldl step ( [], startSeq ) pages
+        |> Tuple.mapFirst List.reverse
+
+
+{-| The saved `current` may be an id (new files) or a page title (old files); accept either, else
+fall back to the first page. -}
+resolveCurrent : String -> List Page -> Maybe String
+resolveCurrent raw pages =
+    if List.any (\p -> p.id == raw) pages then
+        Just raw
+
+    else
+        case findByTitle pages raw of
+            Just p ->
+                Just p.id
+
+            Nothing ->
+                Maybe.map .id (List.head pages)
+
+
+pageDecoder : D.Decoder Page
+pageDecoder =
+    D.map5 Page
+        (D.oneOf [ D.field "id" D.string, D.succeed "" ])
+        (D.field "title" D.string)
+        (D.oneOf [ D.field "body" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "owner" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "visibility" D.string, D.succeed "private" ])
+
+
+dictToPages : Dict String String -> List Page
+dictToPages pages =
+    Dict.toList pages
+        |> List.map (\( title, body ) -> { id = "", title = title, body = body, owner = "", visibility = "private" })

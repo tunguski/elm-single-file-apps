@@ -1,6 +1,25 @@
 /* wiki.css — Wiki-app specifics: link styling and the rendered document. Uses the shared theme
    variables so light and dark both work. */
 
+/* Personal / Global namespace switch */
+
+.wiki-ns {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.wiki-ns .btn {
+  flex: 1 1 0;
+}
+
+/* "public" visibility badge (mirrors the shared .badge--shared) */
+
+.badge--public {
+  background: color-mix(in srgb, #2f9e44 18%, transparent);
+  color: #2f9e44;
+}
+
 .wiki-head {
   display: flex;
   align-items: center;
