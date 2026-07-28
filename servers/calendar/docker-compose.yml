@@ -1,0 +1,26 @@
+# Deploys the Calendar backend as calendar.matsuo.pl — its own compose project on the shared external
+# `podman` network (nginx-proxy + acme-companion route it and issue TLS). Serves the app UI + the
+# /api endpoints; per-user data persists in H2 on the calendar-db volume.
+services:
+  calendar:
+    image: ghcr.io/tunguski/elm-single-file-apps/calendar-server:latest
+    container_name: calendar
+    restart: always
+    environment:
+      - VIRTUAL_HOST=calendar.matsuo.pl
+      - VIRTUAL_PORT=8080
+      - LETSENCRYPT_HOST=calendar.matsuo.pl
+      - LETSENCRYPT_EMAIL=admin@matsuo.pl
+      - DB_URL=jdbc:h2:file:/app/db/calendar
+    volumes:
+      - calendar-db:/app/db
+    networks:
+      - podman
+
+volumes:
+  calendar-db:
+
+networks:
+  podman:
+    name: podman
+    external: true
