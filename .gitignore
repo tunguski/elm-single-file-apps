@@ -5,3 +5,5 @@ elm.vendored.local.json
 elm-stuff/
 elm.lock
 node_modules/
+servers/*/server.jar
+servers/*/index.html

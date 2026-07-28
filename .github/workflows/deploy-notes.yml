@@ -1,0 +1,98 @@
+name: Build & deploy the Notes backend (notes.matsuo.pl)
+
+# Builds elm.jar, compiles the notes single-file app, bundles servers/notes/NotesServer.elm into a standalone
+# jar (reads DB_URL for H2, STATIC_DIR to serve the app UI), publishes a container image to GHCR, and
+# redeploys it on the VPS behind nginx-proxy. Same pattern as the sudoku deploy.
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "servers/notes/**"
+      - "src/**"
+      - "shared/**"
+      - ".github/workflows/deploy-notes.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out elm-single-file-apps
+        uses: actions/checkout@v4
+      - name: Check out the elm-lang compiler
+        uses: actions/checkout@v4
+        with:
+          repository: tunguski/elm-lang
+          ref: master
+          path: elm-lang
+      - name: Set up GraalVM for JDK 25
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: "25"
+          distribution: "graalvm"
+          cache: "maven"
+          cache-dependency-path: elm-lang/pom.xml
+      - name: Build the elm compiler (elm.jar)
+        working-directory: elm-lang
+        run: |
+          chmod +x ./mvnw
+          ./mvnw -B -ntp clean package -DskipTests
+      - name: Build the notes app + bundle the server
+        run: |
+          ELM="java -jar $GITHUB_WORKSPACE/elm-lang/target/elm.jar" ./build.sh notes
+          cp build/notes.html servers/notes/index.html
+          java -jar elm-lang/target/elm.jar bundle server             "$PWD/servers/notes/NotesServer.elm" --port 8080 -o servers/notes/server
+          ls -la servers/notes/server.jar servers/notes/index.html
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Derive lowercase image name
+        id: img
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/notes-server" >> "$GITHUB_OUTPUT"
+      - name: Build and push the image
+        uses: docker/build-push-action@v5
+        with:
+          context: servers/notes
+          file: servers/notes/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.img.outputs.name }}:latest
+            ${{ steps.img.outputs.name }}:${{ github.sha }}
+          cache-from: type=gha,scope=notes-server
+          cache-to: type=gha,scope=notes-server,mode=max
+
+  deploy:
+    needs: build-and-push
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out (for the compose file)
+        uses: actions/checkout@v4
+      - name: Encode the compose file for transport
+        run: echo "COMPOSE_B64=$(base64 -w0 servers/notes/docker-compose.yml)" >> "$GITHUB_ENV"
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: vps-7d690b64.vps.ovh.net
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: COMPOSE_B64
+          script: |
+            set -e
+            echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
+            mkdir -p ~/notes-server
+            echo "$COMPOSE_B64" | base64 -d > ~/notes-server/docker-compose.yml
+            podman rm -f notes 2>/dev/null || true
+            cd ~/notes-server
+            podman pull ghcr.io/tunguski/elm-single-file-apps/notes-server:latest
+            podman compose up -d --force-recreate
