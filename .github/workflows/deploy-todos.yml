@@ -44,6 +44,7 @@ jobs:
           ./mvnw -B -ntp clean package -DskipTests
       - name: Build the todos app + bundle the server
         run: |
+          chmod +x ./build.sh
           ELM="java -jar $GITHUB_WORKSPACE/elm-lang/target/elm.jar" ./build.sh todos
           cp build/todos.html servers/todos/index.html
           java -jar elm-lang/target/elm.jar bundle server             "$PWD/servers/todos/TodosServer.elm" --port 8080 -o servers/todos/server

@@ -49,6 +49,7 @@ jobs:
 
       - name: Build the sudoku app + bundle the server
         run: |
+          chmod +x ./build.sh
           ELM="java -jar $GITHUB_WORKSPACE/elm-lang/target/elm.jar" ./build.sh sudoku
           cp build/sudoku.html server/index.html
           java -jar elm-lang/target/elm.jar bundle server \

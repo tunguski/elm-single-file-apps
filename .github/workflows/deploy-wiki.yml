@@ -44,6 +44,7 @@ jobs:
           ./mvnw -B -ntp clean package -DskipTests
       - name: Build the wiki app + bundle the server
         run: |
+          chmod +x ./build.sh
           ELM="java -jar $GITHUB_WORKSPACE/elm-lang/target/elm.jar" ./build.sh wiki
           cp build/wiki.html servers/wiki/index.html
           java -jar elm-lang/target/elm.jar bundle server             "$PWD/servers/wiki/WikiServer.elm" --port 8080 -o servers/wiki/server

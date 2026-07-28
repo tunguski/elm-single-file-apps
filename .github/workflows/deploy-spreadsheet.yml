@@ -44,6 +44,7 @@ jobs:
           ./mvnw -B -ntp clean package -DskipTests
       - name: Build the spreadsheet app + bundle the server
         run: |
+          chmod +x ./build.sh
           ELM="java -jar $GITHUB_WORKSPACE/elm-lang/target/elm.jar" ./build.sh spreadsheet
           cp build/spreadsheet.html servers/spreadsheet/index.html
           java -jar elm-lang/target/elm.jar bundle server             "$PWD/servers/spreadsheet/SpreadsheetServer.elm" --port 8080 -o servers/spreadsheet/server

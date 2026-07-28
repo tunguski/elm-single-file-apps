@@ -44,6 +44,7 @@ jobs:
           ./mvnw -B -ntp clean package -DskipTests
       - name: Build the notes app + bundle the server
         run: |
+          chmod +x ./build.sh
           ELM="java -jar $GITHUB_WORKSPACE/elm-lang/target/elm.jar" ./build.sh notes
           cp build/notes.html servers/notes/index.html
           java -jar elm-lang/target/elm.jar bundle server             "$PWD/servers/notes/NotesServer.elm" --port 8080 -o servers/notes/server
