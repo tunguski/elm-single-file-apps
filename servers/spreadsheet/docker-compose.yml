@@ -1,0 +1,26 @@
+# Deploys the Spreadsheet backend as spreadsheet.matsuo.pl — its own compose project on the shared external
+# `podman` network (nginx-proxy + acme-companion route it and issue TLS). Serves the app UI + the
+# /api endpoints; per-user data persists in H2 on the spreadsheet-db volume.
+services:
+  spreadsheet:
+    image: ghcr.io/tunguski/elm-single-file-apps/spreadsheet-server:latest
+    container_name: spreadsheet
+    restart: always
+    environment:
+      - VIRTUAL_HOST=spreadsheet.matsuo.pl
+      - VIRTUAL_PORT=8080
+      - LETSENCRYPT_HOST=spreadsheet.matsuo.pl
+      - LETSENCRYPT_EMAIL=admin@matsuo.pl
+      - DB_URL=jdbc:h2:file:/app/db/spreadsheet
+    volumes:
+      - spreadsheet-db:/app/db
+    networks:
+      - podman
+
+volumes:
+  spreadsheet-db:
+
+networks:
+  podman:
+    name: podman
+    external: true
