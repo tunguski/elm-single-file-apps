@@ -218,3 +218,50 @@
 .sk-sync-fail {
   color: var(--danger);
 }
+
+/* difficulty select + status meta + daily badge */
+.sk-diff { padding: 6px 8px; font-size: 13px; }
+.sk-status-wrap { display: flex; flex-direction: column; gap: 3px; }
+.sk-meta { font-size: 12.5px; }
+.sk-daily-badge { color: var(--accent); font-weight: 600; }
+
+/* ranking + solved-history panels */
+.sk-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--surface);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sk-panel__title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.sk-rank-list, .sk-solved-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow: auto; }
+.sk-rank-row {
+  display: grid;
+  grid-template-columns: 1.4rem 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 5px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.sk-rank-row.is-me { background: color-mix(in srgb, var(--accent) 16%, transparent); font-weight: 600; }
+.sk-rank-pos { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.sk-rank-who { font-size: 11.5px; }
+.sk-rank-time { font-variant-numeric: tabular-nums; }
+.sk-solved-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 4px;
+  font-size: 13px;
+}
+.sk-solved-diff { color: var(--muted); }
+.sk-solved-time { font-variant-numeric: tabular-nums; }

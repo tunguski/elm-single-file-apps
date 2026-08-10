@@ -1,25 +1,29 @@
 module Sudoku exposing (main)
 
-{-| **Sudoku** — a playable 9x9 Sudoku. Click a cell (or arrow-key to it), type 1–9 to fill it,
-toggle pencil-mark mode to jot candidates, and watch conflicts light up red. Puzzles come from a
-small fixed bank; "New puzzle" cycles through them. The whole in-progress game — which puzzle,
-your entries and pencil marks — lives in the file itself and round-trips on Ctrl+S.
+{-| **Sudoku** — a playable 9×9 Sudoku with an **infinite, seeded generator**. Puzzles are graded into
+four difficulties (easy / medium / hard / hardcore) by how many clues are dug out while keeping a
+**unique** solution; a difficulty `select` switches levels (easy by default). "New puzzle" makes a
+fresh random one; **Puzzle of the Day** is a hard puzzle seeded from the date, so every player gets
+the same board each day.
 
-This app also talks to an optional **backend** ([`server/SudokuServer.elm`](server/SudokuServer.elm)):
-each solve is timed and POSTed so the server can keep a per-player history. The player is identified
-by a UUID minted when the file is first opened ([`App.Env`](App).newId) and **kept in the file** — so
-your identity survives Ctrl+S, but a never-saved file gets a fresh one each open. See [`App`](App).
+The in-progress game lives in the file (Ctrl+S). With a backend ([`server/SudokuServer.elm`]) each
+solve is timed and POSTed, the puzzle is stored, and you can see this puzzle's ranking (everyone who
+solved it, fastest first) and your own solved-puzzle history. Player identity is the file's UUID
+([`App.Env`](App).newId). See [`App`](App).
 -}
 
 import App exposing (Env)
+import Array exposing (Array)
 import Browser.Events
+import Char
 import Dict exposing (Dict)
-import Html exposing (Html, a, button, div, input, span, text)
-import Html.Attributes exposing (class, classList, href, placeholder, target, value)
+import Html exposing (Html, a, button, div, input, option, select, span, text)
+import Html.Attributes exposing (class, classList, href, placeholder, selected, target, value)
 import Html.Events exposing (onClick, onInput)
 import Http
 import Json.Decode as D
 import Json.Encode as E
+import Random
 import Set exposing (Set)
 import Task
 import Time
@@ -37,23 +41,43 @@ main =
         }
 
 
+defaultServerUrl : String
+defaultServerUrl =
+    "https://sudoku.matsuo.pl"
+
+
 
 -- MODEL ----------------------------------------------------------------------
 
 
+type Difficulty
+    = Easy
+    | Medium
+    | Hard
+    | Hardcore
+
+
 type alias Model =
-    { puzzleIndex : Int
+    { givens : Dict Int Int -- the clue cells (index → digit); blanks omitted
+    , solution : Dict Int Int -- the full solution (all 81 cells)
+    , difficulty : Difficulty -- difficulty of the CURRENT puzzle
+    , picked : Difficulty -- difficulty selected for the NEXT "New puzzle"
+    , puzzleId : String -- stable id = the 81-char givens string
+    , isDaily : Bool
     , entries : Dict Int Int
     , marks : Dict Int (Set Int)
     , selected : Maybe Int
     , pencil : Bool
+    , today : String
 
-    -- backend sync (playerId / serverUrl / startedAt / solvedPosted persist; sync is transient)
+    -- backend
     , playerId : String
     , serverUrl : String
     , startedAt : Maybe Int
     , solvedPosted : Bool
     , sync : Sync
+    , ranking : List RankEntry -- this puzzle's ranking (fastest first)
+    , solved : List SolvedEntry -- this player's solved puzzles
     }
 
 
@@ -64,106 +88,39 @@ type Sync
     | Failed
 
 
-defaultServerUrl : String
-defaultServerUrl =
-    "https://sudoku.matsuo.pl"
+type alias RankEntry =
+    { player : String, elapsedMs : Int, solvedAt : Int }
+
+
+type alias SolvedEntry =
+    { puzzleId : String, difficulty : String, elapsedMs : Int, solvedAt : Int }
 
 
 init : Env -> ( Model, Cmd Msg )
 init env =
-    ( { puzzleIndex = 0
-      , entries = Dict.empty
-      , marks = Dict.empty
-      , selected = Nothing
-      , pencil = False
-      , playerId = env.newId
-      , serverUrl = defaultServerUrl
-      , startedAt = Nothing
-      , solvedPosted = False
-      , sync = Idle
-      }
-    , Cmd.none
-    )
-
-
-
--- PUZZLE BANK ----------------------------------------------------------------
-
-
-{-| A fixed bank of valid puzzles. '0' (or '.') marks a blank cell. Row-major, 81 chars each.
--}
-bank : List String
-bank =
-    [ "530070000600195000098000060800060003400803001700020006060000280000419005000080079"
-    , "004300209005009001070060043006002087190007400050083000600000105003508690042910300"
-    , "200080300060070084030500209000105408000000000402706000301007040720040060004010003"
-    , "000000907000420180000705026100904000050000040000507009920108000034059000507000000"
-    , "030050040008010500460000012070502080000603000040109030250000098001020600080060020"
-    ]
-
-
-bankSize : Int
-bankSize =
-    List.length bank
-
-
-{-| The 81-char string for a puzzle index (wrapping, defensively).
--}
-puzzleString : Int -> String
-puzzleString idx =
     let
-        i =
-            modBy bankSize idx
+        base =
+            { givens = Dict.empty
+            , solution = Dict.empty
+            , difficulty = Easy
+            , picked = Easy
+            , puzzleId = ""
+            , isDaily = False
+            , entries = Dict.empty
+            , marks = Dict.empty
+            , selected = Nothing
+            , pencil = False
+            , today = env.today
+            , playerId = env.newId
+            , serverUrl = defaultServerUrl
+            , startedAt = Nothing
+            , solvedPosted = False
+            , sync = Idle
+            , ranking = []
+            , solved = []
+            }
     in
-    bank
-        |> List.drop i
-        |> List.head
-        |> Maybe.withDefault (String.repeat 81 "0")
-
-
-charDigit : Char -> Int
-charDigit c =
-    case c of
-        '1' ->
-            1
-
-        '2' ->
-            2
-
-        '3' ->
-            3
-
-        '4' ->
-            4
-
-        '5' ->
-            5
-
-        '6' ->
-            6
-
-        '7' ->
-            7
-
-        '8' ->
-            8
-
-        '9' ->
-            9
-
-        _ ->
-            0
-
-
-{-| The clue digits for a puzzle: cell index → digit, blanks omitted.
--}
-givensFor : Int -> Dict Int Int
-givensFor idx =
-    puzzleString idx
-        |> String.toList
-        |> List.indexedMap (\i c -> ( i, charDigit c ))
-        |> List.filter (\( _, d ) -> d /= 0)
-        |> Dict.fromList
+    ( loadPuzzle (generate Easy False (seedFrom env.now)) base, Cmd.none )
 
 
 
@@ -190,17 +147,309 @@ boxOf i =
     (rowOf i // 3) * 3 + (colOf i // 3)
 
 
-{-| Cells sharing a row, column, or 3×3 box with `i`, excluding `i` itself.
--}
 peers : Int -> List Int
 peers i =
     List.filter
-        (\j ->
-            j
-                /= i
-                && (rowOf j == rowOf i || colOf j == colOf i || boxOf j == boxOf i)
-        )
+        (\j -> j /= i && (rowOf j == rowOf i || colOf j == colOf i || boxOf j == boxOf i))
         allIndices
+
+
+
+-- GENERATOR ------------------------------------------------------------------
+
+
+type alias Puzzle =
+    { givens : Dict Int Int, solution : Dict Int Int, difficulty : Difficulty, isDaily : Bool }
+
+
+{-| Generate a puzzle at `diff` from an integer seed (deterministic: same seed → same puzzle, which
+is what makes the daily puzzle identical for everyone).
+-}
+generate : Difficulty -> Bool -> Int -> Puzzle
+generate diff daily seedInt =
+    let
+        seed0 =
+            Random.initialSeed seedInt
+    in
+    case fillGrid seed0 of
+        Just ( full, seed1 ) ->
+            let
+                dug =
+                    dig diff full seed1
+            in
+            { givens = gridToDict dug, solution = gridToDict full, difficulty = diff, isDaily = daily }
+
+        Nothing ->
+            { givens = Dict.empty, solution = Dict.empty, difficulty = diff, isDaily = daily }
+
+
+emptyGrid : Array Int
+emptyGrid =
+    Array.repeat 81 0
+
+
+{-| Digits already used in cell `i`'s row, column or box. -}
+usedDigits : Array Int -> Int -> Set Int
+usedDigits g i =
+    let
+        r =
+            rowOf i
+
+        c =
+            colOf i
+
+        b =
+            boxOf i
+    in
+    List.foldl
+        (\j acc ->
+            if rowOf j == r || colOf j == c || boxOf j == b then
+                case Array.get j g of
+                    Just d ->
+                        if d /= 0 then
+                            Set.insert d acc
+
+                        else
+                            acc
+
+                    Nothing ->
+                        acc
+
+            else
+                acc
+        )
+        Set.empty
+        allIndices
+
+
+candidates : Array Int -> Int -> List Int
+candidates g i =
+    let
+        used =
+            usedDigits g i
+    in
+    List.filter (\d -> not (Set.member d used)) (List.range 1 9)
+
+
+{-| A random completed grid: fill cells 0..80, trying each cell's candidates in a shuffled order and
+backtracking. An empty grid always completes, so this never fails in practice.
+-}
+fillGrid : Random.Seed -> Maybe ( Array Int, Random.Seed )
+fillGrid seed =
+    fillFrom 0 emptyGrid seed
+
+
+fillFrom : Int -> Array Int -> Random.Seed -> Maybe ( Array Int, Random.Seed )
+fillFrom i g seed =
+    if i >= 81 then
+        Just ( g, seed )
+
+    else
+        let
+            ( cands, seed2 ) =
+                shuffle (candidates g i) seed
+        in
+        tryFill i g cands seed2
+
+
+tryFill : Int -> Array Int -> List Int -> Random.Seed -> Maybe ( Array Int, Random.Seed )
+tryFill i g cands seed =
+    case cands of
+        [] ->
+            Nothing
+
+        d :: rest ->
+            case fillFrom (i + 1) (Array.set i d g) seed of
+                Just result ->
+                    Just result
+
+                Nothing ->
+                    tryFill i g rest seed
+
+
+{-| Remove clues (in shuffled order) as long as the puzzle keeps exactly one solution, stopping when
+the difficulty's target clue count is reached (hardcore digs until nothing more can be removed).
+-}
+dig : Difficulty -> Array Int -> Random.Seed -> Array Int
+dig diff full seed =
+    let
+        ( order, _ ) =
+            shuffle allIndices seed
+    in
+    digCells order (targetGivens diff) full
+
+
+digCells : List Int -> Int -> Array Int -> Array Int
+digCells order target g =
+    case order of
+        [] ->
+            g
+
+        i :: rest ->
+            if givenCount g <= target then
+                g
+
+            else
+                let
+                    g2 =
+                        Array.set i 0 g
+                in
+                if solveCount g2 == 1 then
+                    digCells rest target g2
+
+                else
+                    digCells rest target g
+
+
+targetGivens : Difficulty -> Int
+targetGivens diff =
+    case diff of
+        Easy ->
+            48
+
+        Medium ->
+            40
+
+        Hard ->
+            32
+
+        Hardcore ->
+            17
+
+
+givenCount : Array Int -> Int
+givenCount g =
+    Array.foldl
+        (\d acc ->
+            if d /= 0 then
+                acc + 1
+
+            else
+                acc
+        )
+        0
+        g
+
+
+{-| Number of solutions, capped at 2 (enough to decide uniqueness). Uses the minimum-remaining-values
+heuristic (fill the most-constrained cell first) so it stays fast even on sparse grids.
+-}
+solveCount : Array Int -> Int
+solveCount g =
+    case mostConstrained g of
+        Nothing ->
+            1
+
+        Just i ->
+            countCands i g (candidates g i) 0
+
+
+countCands : Int -> Array Int -> List Int -> Int -> Int
+countCands i g cands acc =
+    if acc >= 2 then
+        acc
+
+    else
+        case cands of
+            [] ->
+                acc
+
+            d :: rest ->
+                countCands i g rest (acc + solveCount (Array.set i d g))
+
+
+mostConstrained : Array Int -> Maybe Int
+mostConstrained g =
+    List.foldl
+        (\i best ->
+            if Array.get i g == Just 0 then
+                let
+                    n =
+                        List.length (candidates g i)
+                in
+                case best of
+                    Nothing ->
+                        Just ( i, n )
+
+                    Just ( _, bn ) ->
+                        if n < bn then
+                            Just ( i, n )
+
+                        else
+                            best
+
+            else
+                best
+        )
+        Nothing
+        allIndices
+        |> Maybe.map Tuple.first
+
+
+{-| Deterministic shuffle: tag each element with a pseudo-random key and sort by it. -}
+shuffle : List a -> Random.Seed -> ( List a, Random.Seed )
+shuffle xs seed =
+    let
+        ( keys, seed2 ) =
+            Random.step (Random.list (List.length xs) (Random.int 0 1000000000)) seed
+    in
+    ( List.map Tuple.second (List.sortBy Tuple.first (List.map2 Tuple.pair keys xs)), seed2 )
+
+
+gridToDict : Array Int -> Dict Int Int
+gridToDict g =
+    Array.toIndexedList g
+        |> List.filter (\( _, d ) -> d /= 0)
+        |> Dict.fromList
+
+
+{-| A positive, non-trivial seed derived from an integer (0 → a fixed fallback). -}
+seedFrom : Int -> Int
+seedFrom n =
+    if n <= 0 then
+        123457
+
+    else
+        n
+
+
+{-| Deterministic seed for a date string (djb2), so the daily puzzle is stable per day. -}
+seedForDate : String -> Int
+seedForDate s =
+    String.foldl (\ch acc -> modBy 2000000000 (acc * 33 + Char.toCode ch)) 5381 s + 1
+
+
+loadPuzzle : Puzzle -> Model -> Model
+loadPuzzle p model =
+    { model
+        | givens = p.givens
+        , solution = p.solution
+        , difficulty = p.difficulty
+        , puzzleId = puzzleIdOf p.givens
+        , isDaily = p.isDaily
+        , entries = Dict.empty
+        , marks = Dict.empty
+        , selected = Nothing
+        , startedAt = Nothing
+        , solvedPosted = False
+        , ranking = []
+    }
+
+
+puzzleIdOf : Dict Int Int -> String
+puzzleIdOf givens =
+    String.concat
+        (List.map
+            (\i ->
+                case Dict.get i givens of
+                    Just d ->
+                        String.fromInt d
+
+                    Nothing ->
+                        "0"
+            )
+            allIndices
+        )
 
 
 
@@ -209,14 +458,12 @@ peers i =
 
 isGiven : Model -> Int -> Bool
 isGiven model i =
-    Dict.member i (givensFor model.puzzleIndex)
+    Dict.member i model.givens
 
 
-{-| The effective digit in a cell (given clue, else user entry, else 0 = blank).
--}
-digitAt : Dict Int Int -> Model -> Int -> Int
-digitAt givens model i =
-    case Dict.get i givens of
+digitAt : Model -> Int -> Int
+digitAt model i =
+    case Dict.get i model.givens of
         Just d ->
             d
 
@@ -229,30 +476,24 @@ marksAt model i =
     Maybe.withDefault Set.empty (Dict.get i model.marks)
 
 
-{-| Every cell that clashes with a same-digit peer.
--}
-conflictSet : Dict Int Int -> Model -> Set Int
-conflictSet givens model =
-    let
-        d i =
-            digitAt givens model i
-    in
+conflictSet : Model -> Set Int
+conflictSet model =
     allIndices
         |> List.filter
             (\i ->
                 let
                     di =
-                        d i
+                        digitAt model i
                 in
-                di /= 0 && List.any (\j -> d j == di) (peers i)
+                di /= 0 && List.any (\j -> digitAt model j == di) (peers i)
             )
         |> Set.fromList
 
 
-isSolved : Dict Int Int -> Model -> Bool
-isSolved givens model =
-    List.all (\i -> digitAt givens model i /= 0) allIndices
-        && Set.isEmpty (conflictSet givens model)
+isSolved : Model -> Bool
+isSolved model =
+    List.all (\i -> digitAt model i /= 0) allIndices
+        && Set.isEmpty (conflictSet model)
 
 
 hasProgress : Model -> Bool
@@ -270,11 +511,16 @@ type Msg
     | PadDigit Int
     | ClearCell
     | TogglePencil
+    | PickDifficulty String
     | NewPuzzle
+    | DailyPuzzle
+    | GenPuzzle Difficulty Bool Int
     | ResetPuzzle
     | StartedAt Int
     | SolvedAt Int
     | GotSync (Result Http.Error Summary)
+    | GotRanking (Result Http.Error (List RankEntry))
+    | GotSolved (Result Http.Error (List SolvedEntry))
     | SetServerUrl String
     | RefreshStats
 
@@ -294,25 +540,25 @@ update msg model =
         TogglePencil ->
             ( { model | pencil = not model.pencil }, Cmd.none )
 
+        PickDifficulty s ->
+            ( { model | picked = difficultyFromString s }, Cmd.none )
+
         NewPuzzle ->
-            ( { model
-                | puzzleIndex = modBy bankSize (model.puzzleIndex + 1)
-                , entries = Dict.empty
-                , marks = Dict.empty
-                , selected = Nothing
-                , startedAt = Nothing
-                , solvedPosted = False
-              }
+            -- Fresh timestamp → fresh seed, so each new puzzle differs.
+            ( model, requestNow (GenPuzzle model.picked False) )
+
+        DailyPuzzle ->
+            ( loadPuzzle (generate Hard True (seedForDate model.today)) model
             , Cmd.none
             )
+                |> fetchRankingAfter
+
+        GenPuzzle diff daily seed ->
+            ( loadPuzzle (generate diff daily (seedFrom seed)) model, Cmd.none )
+                |> fetchRankingAfter
 
         ResetPuzzle ->
-            ( { model
-                | entries = Dict.empty
-                , marks = Dict.empty
-                , startedAt = Nothing
-                , solvedPosted = False
-              }
+            ( { model | entries = Dict.empty, marks = Dict.empty, startedAt = Nothing, solvedPosted = False }
             , Cmd.none
             )
 
@@ -335,15 +581,31 @@ update msg model =
         GotSync result ->
             ( { model | sync = syncFromResult result }, Cmd.none )
 
+        GotRanking result ->
+            ( { model | ranking = Result.withDefault model.ranking result }, Cmd.none )
+
+        GotSolved result ->
+            ( { model | solved = Result.withDefault model.solved result }, Cmd.none )
+
         SetServerUrl url ->
             ( { model | serverUrl = url }, Cmd.none )
 
         RefreshStats ->
-            if String.trim model.serverUrl == "" || String.trim model.playerId == "" then
-                ( model, Cmd.none )
+            if backendReady model then
+                ( { model | sync = Syncing }, Cmd.batch [ getStats model, getSolved model ] )
 
             else
-                ( { model | sync = Syncing }, getStats model )
+                ( model, Cmd.none )
+
+
+{-| After changing the puzzle, refresh this puzzle's ranking if a backend is configured. -}
+fetchRankingAfter : ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
+fetchRankingAfter ( model, cmd ) =
+    if backendReady model then
+        ( model, Cmd.batch [ cmd, getRanking model ] )
+
+    else
+        ( model, cmd )
 
 
 handleKey : String -> Model -> ( Model, Cmd Msg )
@@ -389,18 +651,11 @@ handleKey key model =
                     ( model, Cmd.none )
 
 
-{-| After a cell-filling move, drive the timing/sync effects: start the clock on the first real entry
-(`Time.now` → [`StartedAt`](#Msg)), and when the board becomes solved, stamp the finish time
-(`Time.now` → [`SolvedAt`](#Msg)) which then POSTs the game.
--}
 afterMove : Model -> ( Model, Cmd Msg )
 afterMove model =
     let
-        givens =
-            givensFor model.puzzleIndex
-
         solved =
-            isSolved givens model
+            isSolved model
 
         startCmd =
             if model.startedAt == Nothing && hasProgress model then
@@ -431,7 +686,9 @@ onSolved finishedAt model =
         next =
             { model | solvedPosted = True, sync = Syncing }
     in
-    ( next, postGame next elapsed finishedAt )
+    ( next
+    , Cmd.batch [ postGame next elapsed finishedAt, getRanking next, getSolved next ]
+    )
 
 
 requestNow : (Int -> Msg) -> Cmd Msg
@@ -498,10 +755,7 @@ applyDigit d model =
                 { model | marks = Dict.insert i next model.marks }
 
             else
-                { model
-                    | entries = Dict.insert i d model.entries
-                    , marks = Dict.remove i model.marks
-                }
+                { model | entries = Dict.insert i d model.entries, marks = Dict.remove i model.marks }
 
 
 clearSelected : Model -> Model
@@ -515,10 +769,7 @@ clearSelected model =
                 model
 
             else
-                { model
-                    | entries = Dict.remove i model.entries
-                    , marks = Dict.remove i model.marks
-                }
+                { model | entries = Dict.remove i model.entries, marks = Dict.remove i model.marks }
 
 
 
@@ -529,24 +780,11 @@ type alias Summary =
     { count : Int, totalMs : Int }
 
 
-summaryDecoder : D.Decoder Summary
-summaryDecoder =
-    D.map2 Summary
-        (D.field "count" D.int)
-        (D.field "totalMs" D.int)
+backendReady : Model -> Bool
+backendReady model =
+    String.trim model.serverUrl /= "" && String.trim model.playerId /= ""
 
 
-syncFromResult : Result Http.Error Summary -> Sync
-syncFromResult result =
-    case result of
-        Ok s ->
-            Synced s.count s.totalMs
-
-        Err _ ->
-            Failed
-
-
-{-| Drop a trailing slash so `base ++ "/games"` never doubles up. -}
 apiBase : Model -> String
 apiBase model =
     if String.endsWith "/" model.serverUrl then
@@ -558,7 +796,7 @@ apiBase model =
 
 postGame : Model -> Int -> Int -> Cmd Msg
 postGame model elapsedMs solvedAt =
-    if String.trim model.serverUrl == "" || String.trim model.playerId == "" then
+    if not (backendReady model) then
         Cmd.none
 
     else
@@ -568,7 +806,10 @@ postGame model elapsedMs solvedAt =
                 Http.jsonBody
                     (E.object
                         [ ( "playerId", E.string model.playerId )
-                        , ( "puzzleIndex", E.int model.puzzleIndex )
+                        , ( "puzzleId", E.string model.puzzleId )
+                        , ( "givens", E.string model.puzzleId )
+                        , ( "solution", E.string (solutionString model) )
+                        , ( "difficulty", E.string (difficultyToString model.difficulty) )
                         , ( "elapsedMs", E.int elapsedMs )
                         , ( "solvedAt", E.int solvedAt )
                         ]
@@ -583,6 +824,130 @@ getStats model =
         { url = apiBase model ++ "/games?playerId=" ++ model.playerId
         , expect = Http.expectJson GotSync summaryDecoder
         }
+
+
+getRanking : Model -> Cmd Msg
+getRanking model =
+    if not (backendReady model) || model.puzzleId == "" then
+        Cmd.none
+
+    else
+        Http.get
+            { url = apiBase model ++ "/ranking?puzzleId=" ++ model.puzzleId
+            , expect = Http.expectJson GotRanking (D.field "ranking" (D.list rankDecoder))
+            }
+
+
+getSolved : Model -> Cmd Msg
+getSolved model =
+    if not (backendReady model) then
+        Cmd.none
+
+    else
+        Http.get
+            { url = apiBase model ++ "/games?playerId=" ++ model.playerId
+            , expect = Http.expectJson GotSolved (D.field "games" (D.list solvedDecoder))
+            }
+
+
+solutionString : Model -> String
+solutionString model =
+    String.concat
+        (List.map
+            (\i ->
+                case Dict.get i model.solution of
+                    Just d ->
+                        String.fromInt d
+
+                    Nothing ->
+                        "0"
+            )
+            allIndices
+        )
+
+
+summaryDecoder : D.Decoder Summary
+summaryDecoder =
+    D.map2 Summary (D.field "count" D.int) (D.field "totalMs" D.int)
+
+
+rankDecoder : D.Decoder RankEntry
+rankDecoder =
+    D.map3 RankEntry
+        (D.field "player" D.string)
+        (D.field "elapsedMs" D.int)
+        (D.oneOf [ D.field "solvedAt" D.int, D.succeed 0 ])
+
+
+solvedDecoder : D.Decoder SolvedEntry
+solvedDecoder =
+    D.map4 SolvedEntry
+        (D.oneOf [ D.field "puzzleId" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "difficulty" D.string, D.succeed "" ])
+        (D.field "elapsedMs" D.int)
+        (D.oneOf [ D.field "solvedAt" D.int, D.succeed 0 ])
+
+
+syncFromResult : Result Http.Error Summary -> Sync
+syncFromResult result =
+    case result of
+        Ok s ->
+            Synced s.count s.totalMs
+
+        Err _ ->
+            Failed
+
+
+
+-- DIFFICULTY <-> STRING
+
+
+difficultyToString : Difficulty -> String
+difficultyToString d =
+    case d of
+        Easy ->
+            "easy"
+
+        Medium ->
+            "medium"
+
+        Hard ->
+            "hard"
+
+        Hardcore ->
+            "hardcore"
+
+
+difficultyLabel : Difficulty -> String
+difficultyLabel d =
+    case d of
+        Easy ->
+            "Easy"
+
+        Medium ->
+            "Medium"
+
+        Hard ->
+            "Hard"
+
+        Hardcore ->
+            "Hardcore"
+
+
+difficultyFromString : String -> Difficulty
+difficultyFromString s =
+    case s of
+        "medium" ->
+            Medium
+
+        "hard" ->
+            Hard
+
+        "hardcore" ->
+            Hardcore
+
+        _ ->
+            Easy
 
 
 
@@ -601,19 +966,16 @@ subscriptions _ =
 view : Model -> Html Msg
 view model =
     let
-        givens =
-            givensFor model.puzzleIndex
-
         conflicts =
-            conflictSet givens model
+            conflictSet model
 
         solved =
-            isSolved givens model
+            isSolved model
 
         selDigit =
             case model.selected of
                 Just i ->
-                    digitAt givens model i
+                    digitAt model i
 
                 Nothing ->
                     0
@@ -621,29 +983,43 @@ view model =
     div [ class "app" ]
         [ div [ class "toolbar" ]
             [ span [ class "toolbar__title" ] [ text "Sudoku" ]
+            , difficultySelect model
+            , button [ class "btn btn--primary", onClick NewPuzzle ] [ text "New puzzle" ]
+            , button [ class "btn", onClick DailyPuzzle ] [ text "Puzzle of the day" ]
             , button
-                [ class "btn"
-                , classList [ ( "btn--primary", model.pencil ) ]
-                , onClick TogglePencil
-                ]
+                [ class "btn", classList [ ( "btn--primary", model.pencil ) ], onClick TogglePencil ]
                 [ text ("Pencil: " ++ onOff model.pencil) ]
             , button [ class "btn", onClick ClearCell ] [ text "Clear cell" ]
             , button [ class "btn btn--danger", onClick ResetPuzzle ] [ text "Reset" ]
-            , button [ class "btn btn--primary", onClick NewPuzzle ] [ text "New puzzle" ]
             ]
         , div [ class "body sk-body" ]
             [ div [ class "sk-stage" ]
                 [ div [ class "sk-grid" ]
-                    (List.map (cellView givens model conflicts selDigit) allIndices)
+                    (List.map (cellView model conflicts selDigit) allIndices)
                 , div [ class "sk-side" ]
                     [ statusView solved model
-                    , padView model
+                    , padView
                     , syncView model
+                    , rankingView model
+                    , solvedView model
                     , helpView
                     ]
                 ]
             ]
         ]
+
+
+difficultySelect : Model -> Html Msg
+difficultySelect model =
+    select [ class "sk-diff", onInput PickDifficulty ]
+        (List.map
+            (\d ->
+                option
+                    [ value (difficultyToString d), selected (d == model.picked) ]
+                    [ text (difficultyLabel d) ]
+            )
+            [ Easy, Medium, Hard, Hardcore ]
+        )
 
 
 onOff : Bool -> String
@@ -655,14 +1031,14 @@ onOff b =
         "off"
 
 
-cellView : Dict Int Int -> Model -> Set Int -> Int -> Int -> Html Msg
-cellView givens model conflicts selDigit i =
+cellView : Model -> Set Int -> Int -> Int -> Html Msg
+cellView model conflicts selDigit i =
     let
         d =
-            digitAt givens model i
+            digitAt model i
 
         given =
-            Dict.member i givens
+            isGiven model i
 
         isSel =
             model.selected == Just i
@@ -670,8 +1046,7 @@ cellView givens model conflicts selDigit i =
         isPeer =
             case model.selected of
                 Just s ->
-                    not isSel
-                        && (rowOf s == rowOf i || colOf s == colOf i || boxOf s == boxOf i)
+                    not isSel && (rowOf s == rowOf i || colOf s == colOf i || boxOf s == boxOf i)
 
                 Nothing ->
                     False
@@ -734,25 +1109,27 @@ marksView marks =
 
 statusView : Bool -> Model -> Html Msg
 statusView solved model =
-    if solved then
-        div [ class "sk-status sk-status--solved" ] [ text "Solved! 🎉" ]
+    div [ class "sk-status-wrap" ]
+        [ if solved then
+            div [ class "sk-status sk-status--solved" ] [ text "Solved! 🎉" ]
 
-    else
-        div [ class "sk-status" ]
-            [ text ("Puzzle " ++ String.fromInt (model.puzzleIndex + 1) ++ " of " ++ String.fromInt bankSize) ]
+          else
+            div [ class "sk-status" ] [ text (difficultyLabel model.difficulty ++ " puzzle") ]
+        , div [ class "sk-meta muted" ]
+            [ if model.isDaily then
+                span [ class "sk-daily-badge" ] [ text ("★ Daily · " ++ model.today) ]
+
+              else
+                text (String.fromInt (Dict.size model.givens) ++ " clues")
+            ]
+        ]
 
 
-padView : Model -> Html Msg
-padView model =
+padView : Html Msg
+padView =
     div [ class "sk-pad" ]
         (List.map
-            (\n ->
-                button
-                    [ class "btn sk-key"
-                    , onClick (PadDigit n)
-                    ]
-                    [ text (String.fromInt n) ]
-            )
+            (\n -> button [ class "btn sk-key", onClick (PadDigit n) ] [ text (String.fromInt n) ])
             (List.range 1 9)
             ++ [ button [ class "btn sk-key sk-key--wide", onClick ClearCell ] [ text "Clear" ] ]
         )
@@ -761,20 +1138,12 @@ padView model =
 syncView : Model -> Html Msg
 syncView model =
     div [ class "sk-sync" ]
-        [ div [ class "sk-sync-row" ]
-            [ span [ class "muted" ] [ text "Player " ]
-            , span [ class "kbd" ] [ text (String.left 8 model.playerId) ]
-            ]
-        , div [ class "sk-sync-status" ] [ syncBadge model.sync ]
+        [ div [ class "sk-sync-status" ] [ syncBadge model.sync ]
         , input
-            [ class "sk-sync-url"
-            , placeholder "backend URL (e.g. http://localhost:8080)"
-            , value model.serverUrl
-            , onInput SetServerUrl
-            ]
+            [ class "sk-sync-url", placeholder "backend URL", value model.serverUrl, onInput SetServerUrl ]
             []
         , div [ class "sk-sync-actions" ]
-            [ button [ class "btn btn--ghost", onClick RefreshStats ] [ text "Refresh my stats" ]
+            [ button [ class "btn btn--ghost", onClick RefreshStats ] [ text "Refresh" ]
             , viewLeaderboardLink model
             ]
         ]
@@ -794,34 +1163,79 @@ syncBadge : Sync -> Html Msg
 syncBadge sync =
     case sync of
         Idle ->
-            span [ class "muted" ] [ text "Solve a puzzle to record it." ]
+            span [ class "muted" ] [ text "Solve a puzzle to record your time." ]
 
         Syncing ->
             span [ class "muted" ] [ text "Syncing…" ]
 
         Synced count totalMs ->
             span [ class "sk-sync-ok" ]
-                [ text
-                    ("✔ "
-                        ++ String.fromInt count
-                        ++ pluralGames count
-                        ++ " · "
-                        ++ fmtDuration totalMs
-                        ++ " total"
-                    )
-                ]
+                [ text ("✔ " ++ String.fromInt count ++ " solved · " ++ fmtDuration totalMs ++ " total") ]
 
         Failed ->
             span [ class "sk-sync-fail" ] [ text "⚠ Couldn't reach the backend (still saved locally)." ]
 
 
-pluralGames : Int -> String
-pluralGames n =
-    if n == 1 then
-        " game"
+rankingView : Model -> Html Msg
+rankingView model =
+    if List.isEmpty model.ranking then
+        text ""
 
     else
-        " games"
+        div [ class "sk-panel" ]
+            [ div [ class "sk-panel__title" ] [ text "This puzzle · fastest solvers" ]
+            , div [ class "sk-rank-list" ]
+                (List.indexedMap
+                    (\n r ->
+                        div [ classList [ ( "sk-rank-row", True ), ( "is-me", r.player == model.playerId ) ] ]
+                            [ span [ class "sk-rank-pos" ] [ text (String.fromInt (n + 1)) ]
+                            , span [ class "sk-rank-who kbd" ] [ text (String.left 8 r.player) ]
+                            , span [ class "sk-rank-time" ] [ text (fmtDuration r.elapsedMs) ]
+                            ]
+                    )
+                    model.ranking
+                )
+            ]
+
+
+solvedView : Model -> Html Msg
+solvedView model =
+    if List.isEmpty model.solved then
+        text ""
+
+    else
+        div [ class "sk-panel" ]
+            [ div [ class "sk-panel__title" ]
+                [ text ("Your solved puzzles (" ++ String.fromInt (List.length model.solved) ++ ")") ]
+            , div [ class "sk-solved-list" ]
+                (List.map
+                    (\s ->
+                        div [ class "sk-solved-row" ]
+                            [ span [ class "sk-solved-diff" ] [ text (labelOr s.difficulty) ]
+                            , span [ class "sk-solved-time" ] [ text (fmtDuration s.elapsedMs) ]
+                            ]
+                    )
+                    (List.take 20 model.solved)
+                )
+            ]
+
+
+labelOr : String -> String
+labelOr s =
+    if s == "" then
+        "—"
+
+    else
+        String.toUpper (String.left 1 s) ++ String.dropLeft 1 s
+
+
+helpView : Html Msg
+helpView =
+    div [ class "sk-help muted" ]
+        [ div [] [ span [ class "kbd" ] [ text "1–9" ], text " fill" ]
+        , div [] [ span [ class "kbd" ] [ text "⌫" ], text " clear · ", span [ class "kbd" ] [ text "P" ], text " pencil" ]
+        , div [] [ span [ class "kbd" ] [ text "↑↓←→" ], text " move" ]
+        ]
 
 
 fmtDuration : Int -> String
@@ -838,29 +1252,15 @@ fmtDuration ms =
 
         s =
             modBy 60 totalSec
+
+        pad n =
+            String.padLeft 2 '0' (String.fromInt n)
     in
     if h > 0 then
-        String.fromInt h ++ "h " ++ String.fromInt m ++ "m"
-
-    else if m > 0 then
-        String.fromInt m ++ "m " ++ String.fromInt s ++ "s"
+        String.fromInt h ++ ":" ++ pad m ++ ":" ++ pad s
 
     else
-        String.fromInt s ++ "s"
-
-
-helpView : Html Msg
-helpView =
-    div [ class "sk-help muted" ]
-        [ div []
-            [ span [ class "kbd" ] [ text "1–9" ], text " fill" ]
-        , div []
-            [ span [ class "kbd" ] [ text "⌫" ], text " / ", span [ class "kbd" ] [ text "Del" ], text " clear" ]
-        , div []
-            [ span [ class "kbd" ] [ text "P" ], text " pencil mode" ]
-        , div []
-            [ span [ class "kbd" ] [ text "↑↓←→" ], text " move" ]
-        ]
+        String.fromInt m ++ ":" ++ pad s
 
 
 
@@ -870,14 +1270,24 @@ helpView =
 encode : Model -> E.Value
 encode model =
     E.object
-        [ ( "puzzleIndex", E.int model.puzzleIndex )
+        [ ( "givens", encodeCells model.givens )
+        , ( "solution", encodeCells model.solution )
+        , ( "difficulty", E.string (difficultyToString model.difficulty) )
+        , ( "picked", E.string (difficultyToString model.picked) )
+        , ( "puzzleId", E.string model.puzzleId )
+        , ( "isDaily", E.bool model.isDaily )
         , ( "entries", E.dict String.fromInt E.int model.entries )
         , ( "marks", E.dict String.fromInt (\s -> E.list E.int (Set.toList s)) model.marks )
-        , ( "playerId", E.string model.playerId )
-        , ( "serverUrl", E.string model.serverUrl )
         , ( "startedAt", maybeInt model.startedAt )
         , ( "solvedPosted", E.bool model.solvedPosted )
+        , ( "serverUrl", E.string model.serverUrl )
+        , ( "playerId", E.string model.playerId )
         ]
+
+
+encodeCells : Dict Int Int -> E.Value
+encodeCells cells =
+    E.dict String.fromInt E.int cells
 
 
 maybeInt : Maybe Int -> E.Value
@@ -890,57 +1300,70 @@ maybeInt m =
             E.null
 
 
+{-| Applicative `andMap`, so the decoder can restore more fields than `mapN` allows. -}
+andMap : D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
+andMap da df =
+    D.map2 (\a f -> f a) da df
+
+
 decoder : Env -> D.Decoder Model
 decoder env =
-    D.map7
-        (\idx entries marks pid url started posted ->
-            { puzzleIndex = modBy bankSize (max 0 idx)
-            , entries = entries
-            , marks = marks
-            , selected = Nothing
-            , pencil = False
-            , playerId =
-                if String.trim pid == "" then
-                    env.newId
+    let
+        ( baseModel, _ ) =
+            init env
 
-                else
-                    pid
-            , serverUrl =
-                if String.trim url == "" then
-                    defaultServerUrl
+        build givens solution difficulty picked isDaily entries marks started posted serverUrl playerId =
+            let
+                withPuzzle =
+                    if Dict.isEmpty givens then
+                        baseModel
 
-                else
-                    url
-            , startedAt =
-                case started of
-                    Just t ->
-                        Just t
+                    else
+                        { baseModel
+                            | givens = givens
+                            , solution = solution
+                            , difficulty = difficulty
+                            , isDaily = isDaily
+                            , puzzleId = puzzleIdOf givens
+                        }
+            in
+            { withPuzzle
+                | picked = picked
+                , entries = entries
+                , marks = marks
+                , startedAt = started
+                , solvedPosted = posted
+                , serverUrl = serverUrl
+                , playerId =
+                    if playerId == "" then
+                        baseModel.playerId
 
-                    Nothing ->
-                        if Dict.isEmpty entries then
-                            Nothing
-
-                        else
-                            Just env.now
-            , solvedPosted = posted
-            , sync = Idle
+                    else
+                        playerId
             }
-        )
-        (D.oneOf [ D.field "puzzleIndex" D.int, D.succeed 0 ])
-        (D.oneOf [ D.field "entries" intKeyedDict, D.succeed Dict.empty ])
-        (D.oneOf [ D.field "marks" intKeyedMarks, D.succeed Dict.empty ])
-        (D.oneOf [ D.field "playerId" D.string, D.succeed "" ])
-        (D.oneOf [ D.field "serverUrl" D.string, D.succeed "" ])
-        (D.oneOf [ D.field "startedAt" (D.nullable D.int), D.succeed Nothing ])
-        (D.oneOf [ D.field "solvedPosted" D.bool, D.succeed False ])
+    in
+    D.succeed build
+        |> andMap (D.oneOf [ D.field "givens" cellsDecoder, D.succeed Dict.empty ])
+        |> andMap (D.oneOf [ D.field "solution" cellsDecoder, D.succeed Dict.empty ])
+        |> andMap (D.oneOf [ D.field "difficulty" D.string, D.succeed "easy" ] |> D.map difficultyFromString)
+        |> andMap (D.oneOf [ D.field "picked" D.string, D.succeed "easy" ] |> D.map difficultyFromString)
+        |> andMap (D.oneOf [ D.field "isDaily" D.bool, D.succeed False ])
+        |> andMap (D.oneOf [ D.field "entries" intKeyedDict, D.succeed Dict.empty ])
+        |> andMap (D.oneOf [ D.field "marks" intKeyedMarks, D.succeed Dict.empty ])
+        |> andMap (D.oneOf [ D.field "startedAt" (D.nullable D.int), D.succeed Nothing ])
+        |> andMap (D.oneOf [ D.field "solvedPosted" D.bool, D.succeed False ])
+        |> andMap (D.oneOf [ D.field "serverUrl" D.string, D.succeed defaultServerUrl ])
+        |> andMap (D.oneOf [ D.field "playerId" D.string, D.succeed "" ])
 
 
-{-| Decode a JSON object with integer-as-string keys into a `Dict Int Int`.
--}
+cellsDecoder : D.Decoder (Dict Int Int)
+cellsDecoder =
+    D.dict D.int |> D.map toIntKeys
+
+
 intKeyedDict : D.Decoder (Dict Int Int)
 intKeyedDict =
-    D.dict D.int
-        |> D.map toIntKeys
+    D.dict D.int |> D.map toIntKeys
 
 
 intKeyedMarks : D.Decoder (Dict Int (Set Int))
@@ -950,8 +1373,6 @@ intKeyedMarks =
         |> D.map toIntKeys
 
 
-{-| Re-key a `Dict String v` to `Dict Int v`, dropping any non-integer keys.
--}
 toIntKeys : Dict String v -> Dict Int v
 toIntKeys d =
     Dict.foldl

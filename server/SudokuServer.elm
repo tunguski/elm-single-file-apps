@@ -9,15 +9,18 @@ database and serves a live leaderboard. Run it with the elm-lang compiler:
 (or bundle it — the bundled jar reads the same `DB_URL` environment variable; see server/Dockerfile).
 
 Users are identified by a UUID the Sudoku app mints when its file is first opened and stores in the
-file itself (Ctrl+S). Each solve is POSTed here and appended to the `games` table, so history now
-survives restarts and redeploys.
+file itself (Ctrl+S). The app generates its own puzzles (infinite, seeded, graded easy→hardcore, plus
+a date-seeded daily puzzle); a puzzle's `id` is its 81-char givens string, so the same board — the
+daily one especially — is the same id for everyone. Each solve is stored in `games` and the puzzle in
+`puzzles`, so history + per-puzzle rankings survive restarts and redeploys.
 
 Endpoints (all API responses carry permissive CORS headers via `Server.cors`, so a `file://` Sudoku
 page — origin `null` — may call them):
 
-  - `POST /games`  body `{playerId, puzzleIndex, elapsedMs, solvedAt}` → records a solve, returns that
-    player's updated summary as JSON.
-  - `GET  /games?playerId=…` → that player's summary + recent games as JSON.
+  - `POST /games`  body `{playerId, puzzleId, givens, solution, difficulty, elapsedMs, solvedAt}` →
+    stores the puzzle + the solve, returns that player's updated summary.
+  - `GET  /games?playerId=…` → that player's summary + recent solves (each with puzzleId + difficulty).
+  - `GET  /ranking?puzzleId=…` → everyone who solved that puzzle, best time first (for ordering).
   - `GET  /leaderboard`  → an HTML leaderboard: the 10 players with the newest solves, each with the
     number of games passed and the total time spent solving them.
   - `GET  /health` → `ok` (no database access).
@@ -53,10 +56,9 @@ handle req =
             succeed (cors (response 200 "text/plain" "ok"))
 
         _ ->
-            -- Every data route needs the table; creating it here (idempotent, cheap) means the server
-            -- needs no separate migration step.
-            execute createTableSql []
-                |> andThen (\_ -> route req)
+            -- Every data route ensures the schema first (idempotent + a lightweight migration for the
+            -- older single-table version), so the server needs no separate migration step.
+            migrate |> andThen (\_ -> route req)
 
 
 route : Request -> Db Response
@@ -68,6 +70,9 @@ route req =
         ( "GET", [ "games" ] ) ->
             getGames req
 
+        ( "GET", [ "ranking" ] ) ->
+            ranking req
+
         ( "GET", [ "leaderboard" ] ) ->
             leaderboard
 
@@ -75,10 +80,26 @@ route req =
             succeed (cors notFound)
 
 
-createTableSql : String
-createTableSql =
-    "CREATE TABLE IF NOT EXISTS games "
-        ++ "(player VARCHAR NOT NULL, puzzle INT NOT NULL, elapsed_ms BIGINT NOT NULL, solved_at BIGINT NOT NULL)"
+{-| Idempotent schema + migration. `games` gains `puzzle_id`/`difficulty` (ADD COLUMN IF NOT EXISTS
+handles databases created by the older schema); `puzzles` stores each generated board. -}
+migrate : Db ()
+migrate =
+    ddl
+        [ "CREATE TABLE IF NOT EXISTS games (player VARCHAR NOT NULL, puzzle INT, elapsed_ms BIGINT NOT NULL, solved_at BIGINT NOT NULL)"
+        , "ALTER TABLE games ADD COLUMN IF NOT EXISTS puzzle_id VARCHAR"
+        , "ALTER TABLE games ADD COLUMN IF NOT EXISTS difficulty VARCHAR"
+        , "CREATE TABLE IF NOT EXISTS puzzles (id VARCHAR PRIMARY KEY, givens VARCHAR, solution VARCHAR, difficulty VARCHAR, created TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        ]
+
+
+ddl : List String -> Db ()
+ddl statements =
+    case statements of
+        [] ->
+            succeed ()
+
+        sql :: rest ->
+            execute sql [] |> andThen (\_ -> ddl rest)
 
 
 
@@ -87,7 +108,10 @@ createTableSql =
 
 type alias Incoming =
     { playerId : String
-    , puzzleIndex : Int
+    , puzzleId : String
+    , givens : String
+    , solution : String
+    , difficulty : String
     , elapsedMs : Int
     , solvedAt : Int
     }
@@ -95,9 +119,12 @@ type alias Incoming =
 
 incomingDecoder : D.Decoder Incoming
 incomingDecoder =
-    D.map4 Incoming
+    D.map7 Incoming
         (D.field "playerId" D.string)
-        (D.field "puzzleIndex" D.int)
+        (D.field "puzzleId" D.string)
+        (D.oneOf [ D.field "givens" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "solution" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "difficulty" D.string, D.succeed "" ])
         (D.field "elapsedMs" D.int)
         (D.field "solvedAt" D.int)
 
@@ -106,18 +133,33 @@ postGame : Request -> Db Response
 postGame req =
     case D.decodeString incomingDecoder req.body of
         Ok g ->
-            if String.trim g.playerId == "" then
-                succeed (cors (errorJson 400 "missing playerId"))
+            if String.trim g.playerId == "" || String.trim g.puzzleId == "" then
+                succeed (cors (errorJson 400 "missing playerId or puzzleId"))
 
             else
-                execute
-                    "INSERT INTO games (player, puzzle, elapsed_ms, solved_at) VALUES (?, ?, ?, ?)"
-                    [ Db.text g.playerId, int g.puzzleIndex, int g.elapsedMs, int g.solvedAt ]
+                storePuzzle g
+                    |> andThen (\_ -> insertGame g)
                     |> andThen (\_ -> summaryQuery g.playerId)
                     |> map (\s -> cors (json (encodeUser g.playerId s [])))
 
         Err _ ->
             succeed (cors (errorJson 400 "malformed JSON body"))
+
+
+{-| Upsert the puzzle itself so we have its givens/solution/difficulty even before anyone else solves
+it. `created` (defaulted) is left untouched on update, so it records first-seen. -}
+storePuzzle : Incoming -> Db (Result String Int)
+storePuzzle g =
+    execute
+        "MERGE INTO puzzles (id, givens, solution, difficulty) KEY (id) VALUES (?, ?, ?, ?)"
+        [ Db.text g.puzzleId, Db.text g.givens, Db.text g.solution, Db.text g.difficulty ]
+
+
+insertGame : Incoming -> Db (Result String Int)
+insertGame g =
+    execute
+        "INSERT INTO games (player, puzzle, puzzle_id, difficulty, elapsed_ms, solved_at) VALUES (?, 0, ?, ?, ?, ?)"
+        [ Db.text g.playerId, Db.text g.puzzleId, Db.text g.difficulty, int g.elapsedMs, int g.solvedAt ]
 
 
 
@@ -164,13 +206,14 @@ summaryQuery pid =
 
 
 type alias Game =
-    { puzzleIndex : Int, elapsedMs : Int, solvedAt : Int }
+    { puzzleId : String, difficulty : String, elapsedMs : Int, solvedAt : Int }
 
 
 gameRow : RowDecoder Game
 gameRow =
     row Game
-        |> andMap intColumn
+        |> andMap textColumn
+        |> andMap textColumn
         |> andMap intColumn
         |> andMap intColumn
 
@@ -178,10 +221,58 @@ gameRow =
 gamesQuery : String -> Db (List Game)
 gamesQuery pid =
     queryWith
-        "SELECT puzzle, elapsed_ms, solved_at FROM games WHERE player = ? ORDER BY solved_at DESC LIMIT 50"
+        "SELECT COALESCE(puzzle_id, ''), COALESCE(difficulty, ''), elapsed_ms, solved_at FROM games WHERE player = ? ORDER BY solved_at DESC LIMIT 50"
         [ Db.text pid ]
         gameRow
         |> map (Result.withDefault [])
+
+
+
+-- GET /ranking?puzzleId=… — everyone who solved this puzzle, fastest first
+
+
+ranking : Request -> Db Response
+ranking req =
+    case param "puzzleId" req of
+        Just pid ->
+            rankingQuery pid |> map (\rs -> cors (json (rankingJson rs)))
+
+        Nothing ->
+            succeed (cors (errorJson 400 "missing puzzleId query parameter"))
+
+
+type alias RankEntry =
+    { player : String, elapsedMs : Int, solvedAt : Int }
+
+
+rankingQuery : String -> Db (List RankEntry)
+rankingQuery pid =
+    queryWith
+        -- Each player's BEST time on this puzzle, fastest first. MIN(BIGINT) stays a BIGINT (unlike
+        -- SUM), so no CAST is needed for `intColumn`.
+        "SELECT player, MIN(elapsed_ms), MAX(solved_at) FROM games WHERE puzzle_id = ? GROUP BY player ORDER BY MIN(elapsed_ms) ASC LIMIT 100"
+        [ Db.text pid ]
+        (row RankEntry |> andMap textColumn |> andMap intColumn |> andMap intColumn)
+        |> map (Result.withDefault [])
+
+
+rankingJson : List RankEntry -> String
+rankingJson rs =
+    E.encode 0
+        (E.object
+            [ ( "ranking"
+              , E.list
+                    (\r ->
+                        E.object
+                            [ ( "player", E.string r.player )
+                            , ( "elapsedMs", E.int r.elapsedMs )
+                            , ( "solvedAt", E.int r.solvedAt )
+                            ]
+                    )
+                    rs
+              )
+            ]
+        )
 
 
 
@@ -204,7 +295,8 @@ encodeUser pid s games =
 encodeGame : Game -> E.Value
 encodeGame g =
     E.object
-        [ ( "puzzleIndex", E.int g.puzzleIndex )
+        [ ( "puzzleId", E.string g.puzzleId )
+        , ( "difficulty", E.string g.difficulty )
         , ( "elapsedMs", E.int g.elapsedMs )
         , ( "solvedAt", E.int g.solvedAt )
         ]
