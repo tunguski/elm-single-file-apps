@@ -85,6 +85,13 @@
   background: color-mix(in srgb, var(--accent) 22%, var(--surface));
 }
 
+/* selected digit is fully placed (all 9) → green "set everywhere" cue instead of blue. Placed
+   before sk-conflict so a wrong duplicate still shows red. */
+.sk-cell.sk-done {
+  background: color-mix(in srgb, var(--ok) 30%, var(--surface));
+  color: var(--ok);
+}
+
 .sk-cell.sk-conflict {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 20%, var(--surface));

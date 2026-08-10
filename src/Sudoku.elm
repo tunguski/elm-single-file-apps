@@ -501,6 +501,12 @@ hasProgress model =
     not (Dict.isEmpty model.entries)
 
 
+{-| How many cells hold `digit` (givens + entries). -}
+countDigit : Model -> Int -> Int
+countDigit model digit =
+    List.length (List.filter (\i -> digitAt model i == digit) allIndices)
+
+
 
 -- UPDATE ---------------------------------------------------------------------
 
@@ -979,6 +985,11 @@ view model =
 
                 Nothing ->
                     0
+
+        -- The selected digit is fully placed (all 9 on the board) — a "set everywhere" cue,
+        -- independent of whether the placement is actually correct.
+        selDone =
+            selDigit /= 0 && countDigit model selDigit == 9
     in
     div [ class "app" ]
         [ div [ class "toolbar" ]
@@ -995,7 +1006,7 @@ view model =
         , div [ class "body sk-body" ]
             [ div [ class "sk-stage" ]
                 [ div [ class "sk-grid" ]
-                    (List.map (cellView model conflicts selDigit) allIndices)
+                    (List.map (cellView model conflicts selDigit selDone) allIndices)
                 , div [ class "sk-side" ]
                     [ statusView solved model
                     , padView
@@ -1031,8 +1042,8 @@ onOff b =
         "off"
 
 
-cellView : Model -> Set Int -> Int -> Int -> Html Msg
-cellView model conflicts selDigit i =
+cellView : Model -> Set Int -> Int -> Bool -> Int -> Html Msg
+cellView model conflicts selDigit selDone i =
     let
         d =
             digitAt model i
@@ -1069,7 +1080,8 @@ cellView model conflicts selDigit i =
             , ( "sk-given", given )
             , ( "sk-sel", isSel )
             , ( "sk-peer", isPeer )
-            , ( "sk-same", isSame )
+            , ( "sk-same", isSame && not selDone )
+            , ( "sk-done", isSame && selDone )
             , ( "sk-conflict", conflict )
             , ( "sk-br", modBy 3 c == 2 && c /= 8 )
             , ( "sk-bb", modBy 3 r == 2 && r /= 8 )
