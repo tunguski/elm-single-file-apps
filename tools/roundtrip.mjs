@@ -20,6 +20,11 @@ function boot(html, url) {
   const dom = new JSDOM(html, { runScripts: "dangerously", pretendToBeVisual: true, url });
   dom.window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
   dom.window.cancelAnimationFrame = (id) => clearTimeout(id);
+  // No global fetch in jsdom; an app that requests on boot (Sudoku pulls history) would throw and
+  // abort the batched save. A real browser has fetch — stub a never-resolving one for the test.
+  if (typeof dom.window.fetch !== "function") {
+    dom.window.fetch = () => new Promise(() => {});
+  }
   return dom;
 }
 

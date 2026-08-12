@@ -28,6 +28,14 @@ const { window } = dom;
 // jsdom lacks a few things the runtime/harness may touch; stub minimally.
 window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
 window.cancelAnimationFrame = (id) => clearTimeout(id);
+// jsdom has no global `fetch`; an app that fires an HTTP request on boot (e.g. Sudoku pulls the
+// player's history) would otherwise throw synchronously and abort the batched `save` command,
+// leaving the data block un-mirrored. This is purely a missing browser API in the test env — a real
+// browser has fetch — so stub it with a request that simply never resolves: the boot request stays
+// pending, the app boots, and its data still round-trips. (Networking is out of scope for this smoke test.)
+if (typeof window.fetch !== "function") {
+  window.fetch = () => new Promise(() => {});
+}
 
 function done() {
   const results = {};
