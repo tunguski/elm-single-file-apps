@@ -262,6 +262,38 @@
 .sk-rank-row.is-me { background: color-mix(in srgb, var(--accent) 16%, transparent); font-weight: 600; }
 .sk-rank-pos { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
 .sk-rank-who { font-size: 11.5px; }
+
+/* a player id rendered as a clickable link (opens their history) */
+.sk-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.sk-link:hover { color: var(--text); }
+
+/* viewed-player history panel */
+.sk-player-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sk-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.sk-close:hover { color: var(--danger); }
 .sk-rank-time { font-variant-numeric: tabular-nums; }
 .sk-solved-row {
   display: flex;

@@ -78,6 +78,8 @@ type alias Model =
     , sync : Sync
     , ranking : List RankEntry -- this puzzle's ranking (fastest first)
     , solved : List SolvedEntry -- this player's solved puzzles
+    , viewingPlayer : Maybe String -- a ranking player whose full history is being shown
+    , playerGames : List SolvedEntry -- that player's solved puzzles
     }
 
 
@@ -126,9 +128,27 @@ init env =
             , sync = Idle
             , ranking = []
             , solved = []
+            , viewingPlayer = Nothing
+            , playerGames = []
             }
+
+        model =
+            loadPuzzle (generate Easy False (seedFrom env.now)) base
     in
-    ( loadPuzzle (generate Easy False (seedFrom env.now)) base, Cmd.none )
+    ( model, initialFetch model )
+
+
+{-| On boot, pull this player's recorded history from the backend (if one is configured) so a returning
+visitor to a SERVED page sees their solved puzzles and totals right away — without waiting for a solve
+or pressing "Refresh". Fires with the identity `init` settled on (the cookie id when served).
+-}
+initialFetch : Model -> Cmd Msg
+initialFetch model =
+    if backendReady model then
+        Cmd.batch [ getStats model, getSolved model ]
+
+    else
+        Cmd.none
 
 
 
@@ -537,6 +557,9 @@ type Msg
     | GotSolved (Result Http.Error (List SolvedEntry))
     | SetServerUrl String
     | RefreshStats
+    | ViewPlayer String
+    | GotPlayerGames String (Result Http.Error (List SolvedEntry))
+    | ClosePlayer
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -610,6 +633,26 @@ update msg model =
 
             else
                 ( model, Cmd.none )
+
+        ViewPlayer pid ->
+            if String.trim pid == "" then
+                ( model, Cmd.none )
+
+            else
+                ( { model | viewingPlayer = Just pid, playerGames = [] }
+                , getPlayerGames model pid
+                )
+
+        GotPlayerGames pid result ->
+            -- Ignore a stale response if the user has since closed the panel or opened another player.
+            if model.viewingPlayer == Just pid then
+                ( { model | playerGames = Result.withDefault [] result }, Cmd.none )
+
+            else
+                ( model, Cmd.none )
+
+        ClosePlayer ->
+            ( { model | viewingPlayer = Nothing, playerGames = [] }, Cmd.none )
 
 
 {-| After changing the puzzle, refresh this puzzle's ranking if a backend is configured. -}
@@ -864,6 +907,20 @@ getSolved model =
             }
 
 
+{-| Fetch an arbitrary player's solved-game history — the same `/games` endpoint the app uses for its
+own stats, so any player id in a ranking can be inspected. -}
+getPlayerGames : Model -> String -> Cmd Msg
+getPlayerGames model pid =
+    if String.trim model.serverUrl == "" || String.trim pid == "" then
+        Cmd.none
+
+    else
+        Http.get
+            { url = apiBase model ++ "/games?playerId=" ++ pid
+            , expect = Http.expectJson (GotPlayerGames pid) (D.field "games" (D.list solvedDecoder))
+            }
+
+
 solutionString : Model -> String
 solutionString model =
     String.concat
@@ -1020,6 +1077,7 @@ view model =
                     , padView
                     , syncView model
                     , rankingView model
+                    , playerView model
                     , solvedView model
                     , helpView
                     ]
@@ -1209,7 +1267,11 @@ rankingView model =
                     (\n r ->
                         div [ classList [ ( "sk-rank-row", True ), ( "is-me", r.player == model.playerId ) ] ]
                             [ span [ class "sk-rank-pos" ] [ text (String.fromInt (n + 1)) ]
-                            , span [ class "sk-rank-who kbd" ] [ text (String.left 8 r.player) ]
+                            , button
+                                [ class "sk-rank-who kbd sk-link"
+                                , onClick (ViewPlayer r.player)
+                                ]
+                                [ text (String.left 8 r.player) ]
                             , span [ class "sk-rank-time" ] [ text (fmtDuration r.elapsedMs) ]
                             ]
                     )
@@ -1238,6 +1300,59 @@ solvedView model =
                     (List.take 20 model.solved)
                 )
             ]
+
+
+{-| The history of a player clicked in the ranking: every puzzle they solved, difficulty, when, and how
+long it took. Opened by clicking a player id; the ✕ closes it. -}
+playerView : Model -> Html Msg
+playerView model =
+    case model.viewingPlayer of
+        Nothing ->
+            text ""
+
+        Just pid ->
+            div [ class "sk-panel sk-player" ]
+                [ div [ class "sk-panel__title sk-player-head" ]
+                    [ span []
+                        [ text
+                            (if pid == model.playerId then
+                                "You · full history"
+
+                             else
+                                "Player " ++ String.left 8 pid
+                            )
+                        ]
+                    , button [ class "sk-close", onClick ClosePlayer ] [ text "✕" ]
+                    ]
+                , if List.isEmpty model.playerGames then
+                    div [ class "muted sk-meta" ] [ text "No solved games." ]
+
+                  else
+                    div [ class "sk-solved-list" ]
+                        (List.map playerGameRow model.playerGames)
+                ]
+
+
+playerGameRow : SolvedEntry -> Html Msg
+playerGameRow s =
+    div [ class "sk-solved-row" ]
+        [ span [ class "sk-solved-diff" ] [ text (labelOr s.difficulty ++ dateNote s.solvedAt) ]
+        , span [ class "sk-solved-time" ] [ text (fmtDuration s.elapsedMs) ]
+        ]
+
+
+{-| " · YYYY-MM-DD" for a solve instant, or "" when unknown (0). -}
+dateNote : Int -> String
+dateNote ms =
+    let
+        d =
+            fmtDate ms
+    in
+    if d == "" then
+        ""
+
+    else
+        " · " ++ d
 
 
 labelOr : String -> String
@@ -1281,6 +1396,72 @@ fmtDuration ms =
 
     else
         String.fromInt m ++ ":" ++ pad s
+
+
+{-| Format an epoch-ms instant as "YYYY-MM-DD" (UTC) with pure integer date math (Howard Hinnant's
+civil-from-days) — no `Time` wiring — matching the server's leaderboard dates. Empty for 0/unknown. -}
+fmtDate : Int -> String
+fmtDate ms =
+    if ms <= 0 then
+        ""
+
+    else
+        let
+            days =
+                ms // 86400000
+
+            z =
+                days + 719468
+
+            era =
+                (if z >= 0 then
+                    z
+
+                 else
+                    z - 146096
+                )
+                    // 146097
+
+            doe =
+                z - era * 146097
+
+            yoe =
+                (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+
+            y =
+                yoe + era * 400
+
+            doy =
+                doe - (365 * yoe + yoe // 4 - yoe // 100)
+
+            mp =
+                (5 * doy + 2) // 153
+
+            d =
+                doy - (153 * mp + 2) // 5 + 1
+
+            month =
+                mp
+                    + (if mp < 10 then
+                        3
+
+                       else
+                        -9
+                      )
+
+            year =
+                y
+                    + (if month <= 2 then
+                        1
+
+                       else
+                        0
+                      )
+
+            pad n =
+                String.padLeft 2 '0' (String.fromInt n)
+        in
+        String.fromInt year ++ "-" ++ pad month ++ "-" ++ pad d
 
 
 
