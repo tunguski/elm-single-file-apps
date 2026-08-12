@@ -51,12 +51,16 @@ port load : (String -> msg) -> Sub msg
   - `newId` — a freshly minted UUID, generated on every open. An app that wants a stable identity
     keeps its own copy in the saved document and adopts `newId` only when it has none yet — so the
     identity lives in the file and survives Ctrl+S, but a never-saved file gets a new one each open.
+  - `cookieId` — a stable per-browser id from a first-party cookie, present only when the page is
+    SERVED over http(s) (empty from `file://`). An app served by its backend can use this as its
+    identity so a returning visitor keeps their history across visits without saving a file.
 
 -}
 type alias Env =
     { today : String
     , now : Int
     , newId : String
+    , cookieId : String
     }
 
 
@@ -135,7 +139,7 @@ programEffect spec =
 
 defaultEnv : Env
 defaultEnv =
-    { today = "", now = 0, newId = "" }
+    { today = "", now = 0, newId = "", cookieId = "" }
 
 
 build : EffectSpec model msg -> Program () (State model) (Event msg)
@@ -205,8 +209,12 @@ saveCmd spec model =
 
 envelopeDecoder : D.Decoder ( Env, Maybe D.Value )
 envelopeDecoder =
-    D.map4 (\today now newId saved -> ( { today = today, now = now, newId = newId }, saved ))
+    D.map5
+        (\today now newId cookieId saved ->
+            ( { today = today, now = now, newId = newId, cookieId = cookieId }, saved )
+        )
         (D.oneOf [ D.field "today" D.string, D.succeed "" ])
         (D.oneOf [ D.field "now" D.int, D.succeed 0 ])
         (D.oneOf [ D.field "newId" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "cookieId" D.string, D.succeed "" ])
         (D.oneOf [ D.field "saved" (D.nullable D.value), D.succeed Nothing ])

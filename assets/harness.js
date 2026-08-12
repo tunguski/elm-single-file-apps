@@ -70,6 +70,26 @@
     });
   }
 
+  // A stable per-browser id, kept in a first-party cookie on the serving domain — so when the app is
+  // SERVED by its backend (not opened from a file), the same visitor keeps the same identity across
+  // visits and their history is preserved. Empty from a file:// page (no cookies there); the app then
+  // falls back to its file-stored id.
+  function browserUid() {
+    try {
+      if (location.protocol !== "http:" && location.protocol !== "https:") return "";
+      var m = document.cookie.match(/(?:^|;\s*)sfa_uid=([^;]+)/);
+      if (m) return decodeURIComponent(m[1]);
+      var id = freshUuid();
+      var secure = location.protocol === "https:" ? "; secure" : "";
+      // ~10 years; SameSite=Lax keeps it first-party.
+      document.cookie =
+        "sfa_uid=" + encodeURIComponent(id) + "; max-age=315360000; path=/; samesite=lax" + secure;
+      return id;
+    } catch (e) {
+      return "";
+    }
+  }
+
   function sendLoad() {
     if (!app || !app.ports || !app.ports.load) return;
     var savedJson = readEmbedded();
@@ -86,6 +106,7 @@
       today: todayIso(),
       now: Date.now(),
       newId: freshUuid(),
+      cookieId: browserUid(),
       saved: savedValue,
     });
     app.ports.load.send(envelope);

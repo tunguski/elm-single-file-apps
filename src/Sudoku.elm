@@ -111,7 +111,15 @@ init env =
             , selected = Nothing
             , pencil = False
             , today = env.today
-            , playerId = env.newId
+
+            -- Served over http(s): a cookie-backed id kept across visits (so history is preserved
+            -- without saving a file). From file://: a fresh id, persisted in the file on Ctrl+S.
+            , playerId =
+                if String.trim env.cookieId /= "" then
+                    env.cookieId
+
+                else
+                    env.newId
             , serverUrl = defaultServerUrl
             , startedAt = Nothing
             , solvedPosted = False
