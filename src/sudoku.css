@@ -184,8 +184,26 @@
 }
 
 @media (max-width: 640px) {
+  /* Phones: let the board fill the screen width — the default 78vmin left big side margins that made
+     the grid small and hard to read (e.g. on a Pixel 9). Trim the page padding and drive the square
+     board off the viewport width so it spans edge to edge. */
+  .sk-body {
+    padding: 8px;
+  }
+  .sk-stage {
+    gap: 14px;
+    width: 100%;
+  }
+  .sk-grid {
+    --sk-size: calc(100vw - 16px);
+  }
   .sk-side {
-    width: min(78vmin, 540px);
+    width: calc(100vw - 16px);
+    max-width: 540px;
+  }
+  /* The toolbar has many buttons; wrap them instead of overflowing off-screen. */
+  .toolbar {
+    flex-wrap: wrap;
   }
 }
 
