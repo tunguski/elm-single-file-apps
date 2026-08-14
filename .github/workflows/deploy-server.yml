@@ -113,10 +113,14 @@ jobs:
           script: |
             set -e
             echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-            mkdir -p ~/elm-single-file-apps
-            echo "$COMPOSE_B64" | base64 -d > ~/elm-single-file-apps/docker-compose.yml
+            mkdir -p ~/containers/elm-single-file-apps/sudoku-server
+            echo "$COMPOSE_B64" | base64 -d > ~/containers/elm-single-file-apps/sudoku-server/docker-compose.yml
             # Free the container name in case an earlier deploy still owns a container called `sudoku`.
             podman rm -f sudoku 2>/dev/null || true
-            cd ~/elm-single-file-apps
+            cd ~/containers/elm-single-file-apps/sudoku-server
             podman pull ghcr.io/tunguski/elm-single-file-apps/sudoku-server:latest
-            podman compose up -d --force-recreate
+            # Pin the compose project name to the pre-reorg value. The DB is a NAMED volume
+            # (elm-single-file-apps_sudoku-db, namespaced by project name = the old ~/elm-single-file-apps
+            # folder). The compose dir moved to sudoku-server/, which would otherwise re-namespace the
+            # volume and strand the existing game history — pinning keeps the same volume, so data survives.
+            podman compose -p elm-single-file-apps up -d --force-recreate

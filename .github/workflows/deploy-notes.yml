@@ -91,9 +91,10 @@ jobs:
           script: |
             set -e
             echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-            mkdir -p ~/notes-server
-            echo "$COMPOSE_B64" | base64 -d > ~/notes-server/docker-compose.yml
+            mkdir -p ~/containers/elm-single-file-apps/notes-server
+            echo "$COMPOSE_B64" | base64 -d > ~/containers/elm-single-file-apps/notes-server/docker-compose.yml
             podman rm -f notes 2>/dev/null || true
-            cd ~/notes-server
+            cd ~/containers/elm-single-file-apps/notes-server
             podman pull ghcr.io/tunguski/elm-single-file-apps/notes-server:latest
-            podman compose up -d --force-recreate
+            # Pin the project name so the H2 named volume (notes-server_notes-db) is stable regardless of the compose folder.
+            podman compose -p notes-server up -d --force-recreate

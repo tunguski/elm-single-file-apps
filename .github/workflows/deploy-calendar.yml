@@ -91,9 +91,10 @@ jobs:
           script: |
             set -e
             echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-            mkdir -p ~/calendar-server
-            echo "$COMPOSE_B64" | base64 -d > ~/calendar-server/docker-compose.yml
+            mkdir -p ~/containers/elm-single-file-apps/calendar-server
+            echo "$COMPOSE_B64" | base64 -d > ~/containers/elm-single-file-apps/calendar-server/docker-compose.yml
             podman rm -f calendar 2>/dev/null || true
-            cd ~/calendar-server
+            cd ~/containers/elm-single-file-apps/calendar-server
             podman pull ghcr.io/tunguski/elm-single-file-apps/calendar-server:latest
-            podman compose up -d --force-recreate
+            # Pin the project name so the H2 named volume (calendar-server_calendar-db) is stable regardless of the compose folder.
+            podman compose -p calendar-server up -d --force-recreate

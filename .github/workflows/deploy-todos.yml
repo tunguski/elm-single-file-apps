@@ -91,9 +91,10 @@ jobs:
           script: |
             set -e
             echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-            mkdir -p ~/todos-server
-            echo "$COMPOSE_B64" | base64 -d > ~/todos-server/docker-compose.yml
+            mkdir -p ~/containers/elm-single-file-apps/todos-server
+            echo "$COMPOSE_B64" | base64 -d > ~/containers/elm-single-file-apps/todos-server/docker-compose.yml
             podman rm -f todos 2>/dev/null || true
-            cd ~/todos-server
+            cd ~/containers/elm-single-file-apps/todos-server
             podman pull ghcr.io/tunguski/elm-single-file-apps/todos-server:latest
-            podman compose up -d --force-recreate
+            # Pin the project name so the H2 named volume (todos-server_todos-db) is stable regardless of the compose folder.
+            podman compose -p todos-server up -d --force-recreate

@@ -91,9 +91,10 @@ jobs:
           script: |
             set -e
             echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
-            mkdir -p ~/wiki-server
-            echo "$COMPOSE_B64" | base64 -d > ~/wiki-server/docker-compose.yml
+            mkdir -p ~/containers/elm-single-file-apps/wiki-server
+            echo "$COMPOSE_B64" | base64 -d > ~/containers/elm-single-file-apps/wiki-server/docker-compose.yml
             podman rm -f wiki 2>/dev/null || true
-            cd ~/wiki-server
+            cd ~/containers/elm-single-file-apps/wiki-server
             podman pull ghcr.io/tunguski/elm-single-file-apps/wiki-server:latest
-            podman compose up -d --force-recreate
+            # Pin the project name so the H2 named volume (wiki-server_wiki-db) is stable regardless of the compose folder.
+            podman compose -p wiki-server up -d --force-recreate
